@@ -225,77 +225,18 @@ impl App {
         if let Some(ref session_id) = self.active_session_id {
             if let Some(session) = self.session_manager.get(session_id) {
                 let pane_id = session.tmux_pane_id.clone();
-                // Spawn the send as a background task (non-blocking)
-                match key.code {
-                    KeyCode::Esc => {
+                match crate::input::tmux_keys::map_key(key) {
+                    crate::input::tmux_keys::TmuxKey::Special(k) => {
                         tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "Escape").await;
+                            let _ = crate::tmux::commands::send_special_key(&pane_id, &k).await;
                         });
                     }
-                    KeyCode::Enter => {
+                    crate::input::tmux_keys::TmuxKey::Literal(s) => {
                         tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "Enter").await;
+                            let _ = crate::tmux::commands::send_keys_literal(&pane_id, &s).await;
                         });
                     }
-                    KeyCode::Backspace => {
-                        tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "BSpace").await;
-                        });
-                    }
-                    KeyCode::Up => {
-                        tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "Up").await;
-                        });
-                    }
-                    KeyCode::Down => {
-                        tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "Down").await;
-                        });
-                    }
-                    KeyCode::Left => {
-                        tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "Left").await;
-                        });
-                    }
-                    KeyCode::Right => {
-                        tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "Right").await;
-                        });
-                    }
-                    KeyCode::Tab => {
-                        // Shift+Tab → send BTab (BackTab) to tmux
-                        let tmux_key = if key.modifiers.contains(KeyModifiers::SHIFT) {
-                            "BTab"
-                        } else {
-                            "Tab"
-                        };
-                        let tmux_key = tmux_key.to_string();
-                        tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, &tmux_key).await;
-                        });
-                    }
-                    KeyCode::BackTab => {
-                        // BackTab is Shift+Tab on some terminals
-                        tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "BTab").await;
-                        });
-                    }
-                    KeyCode::Char(c) => {
-                        let ch = if key.modifiers.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) {
-                            format!("C-S-{}", c)
-                        } else if key.modifiers.contains(KeyModifiers::CONTROL) {
-                            format!("C-{}", c)
-                        } else if key.modifiers.contains(KeyModifiers::SHIFT) {
-                            // Shift+char — just send the char (uppercase handled by terminal)
-                            c.to_string()
-                        } else {
-                            c.to_string()
-                        };
-                        tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_keys_literal(&pane_id, &ch).await;
-                        });
-                    }
-                    _ => {}
+                    crate::input::tmux_keys::TmuxKey::Ignored => {}
                 }
             }
         }
