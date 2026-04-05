@@ -30,7 +30,11 @@ pub fn next_status(
             reason: AttentionReason::Completed,
             since: Instant::now(),
         }),
-        HookEventName::PostToolUse | HookEventName::PreToolUse | HookEventName::Notification => {
+        HookEventName::PostToolUse
+        | HookEventName::PreToolUse
+        | HookEventName::Notification
+        | HookEventName::UserPromptSubmit
+        | HookEventName::SubagentStart => {
             // Transition any non-terminal status to Running; don't resurrect Stopped/Error
             match current {
                 SessionStatus::Starting

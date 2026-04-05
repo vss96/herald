@@ -27,6 +27,8 @@ pub enum HookEventName {
     Notification,
     SessionStart,
     SessionEnd,
+    UserPromptSubmit,
+    SubagentStart,
 }
 
 /// Priority level for attention queue entries.
@@ -65,6 +67,8 @@ impl HookEventName {
         HookEventName::PostToolUseFailure,
         HookEventName::Stop,
         HookEventName::Notification,
+        HookEventName::UserPromptSubmit,
+        HookEventName::SubagentStart,
     ];
 
     /// Serde variant name for use in JSON hook configuration.
@@ -78,6 +82,8 @@ impl HookEventName {
             Self::Notification => "Notification",
             Self::SessionStart => "SessionStart",
             Self::SessionEnd => "SessionEnd",
+            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::SubagentStart => "SubagentStart",
         }
     }
 }
