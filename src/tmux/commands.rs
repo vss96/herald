@@ -48,7 +48,7 @@ pub async fn new_session(name: &str) -> Result<()> {
 
 pub async fn new_window(session: &str, window_name: &str) -> Result<String> {
     let output = run_tmux(args(&[
-        "new-window", "-t", session, "-n", window_name, "-P", "-F", "#{pane_id}",
+        "new-window", "-a", "-t", session, "-n", window_name, "-P", "-F", "#{pane_id}",
     ]))
     .await?;
     if !output.success {
