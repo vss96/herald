@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
@@ -49,6 +49,8 @@ pub struct App {
     /// Batches literal keystrokes to reduce tmux process spawns.
     pub key_batcher: KeyBatcher,
     pub keybindings: KeyBindings,
+    /// Lines scrolled back from the bottom (0 = live view)
+    pub scroll_offset: u16,
     idle_threshold: Duration,
 }
 
@@ -77,6 +79,7 @@ impl App {
             event_rx: rx,
             key_batcher: KeyBatcher::new(),
             keybindings,
+            scroll_offset: 0,
             idle_threshold: Duration::from_secs(3),
         }
     }
@@ -161,6 +164,7 @@ impl App {
             if let Some(session) = self.session_ids().get(self.sidebar_index) {
                 self.active_session_id = Some(session.clone());
                 self.captured_content = None;
+                self.scroll_offset = 0;
                 self.focus = Focus::MainArea;
             }
         } else if config::key_matches(&key, &kb.switch_to_main) {
@@ -179,12 +183,43 @@ impl App {
         }
     }
 
+    /// Handle a mouse event.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.focus != Focus::MainArea {
+            return;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_offset = self.scroll_offset.saturating_add(3);
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(3);
+            }
+            _ => {}
+        }
+    }
+
     fn handle_main_area_key(&mut self, key: KeyEvent) {
         // Configurable key returns to sidebar (default: Ctrl+G)
         if config::key_matches(&key, &self.keybindings.main_area.return_to_sidebar) {
             self.flush_key_batch();
             self.focus = Focus::Sidebar;
             return;
+        }
+
+        // Scroll keybindings — intercepted, NOT forwarded to tmux
+        if config::key_matches(&key, &self.keybindings.main_area.scroll_up) {
+            self.scroll_offset = self.scroll_offset.saturating_add(5);
+            return;
+        }
+        if config::key_matches(&key, &self.keybindings.main_area.scroll_down) {
+            self.scroll_offset = self.scroll_offset.saturating_sub(5);
+            return;
+        }
+
+        // Any other key resets scroll to live view
+        if self.scroll_offset > 0 {
+            self.scroll_offset = 0;
         }
 
         // Forward all keys to the active tmux pane (including Esc)
@@ -314,6 +349,7 @@ impl App {
         if self.active_session_id.as_ref() == Some(&id) {
             self.active_session_id = self.session_ids().first().cloned();
             self.captured_content = None;
+            self.scroll_offset = 0;
         }
         let count = self.session_manager.session_count();
         if count > 0 {
@@ -368,7 +404,14 @@ impl App {
             }
         };
 
-        match crate::tmux::commands::capture_pane(pane_id.as_str()).await {
+        let visible_height = self.session_manager.terminal_rows().saturating_sub(4);
+        match crate::tmux::commands::capture_pane_scrolled(
+            pane_id.as_str(),
+            self.scroll_offset,
+            visible_height,
+        )
+        .await
+        {
             Ok(content) => {
                 self.captured_content = if content.is_empty() { None } else { Some(content) };
             }
@@ -445,7 +488,7 @@ impl App {
         } else {
             "herald".to_string()
         };
-        let main = MainArea::new(self.captured_content.clone(), title);
+        let main = MainArea::new(self.captured_content.clone(), title, self.scroll_offset);
         Widget::render(main, content_area, buf);
 
         // Render dialog overlay if visible
@@ -718,5 +761,96 @@ mod tests {
         app.dialog.nickname.set("new-task".into());
         let output = render_app(&app);
         insta::assert_snapshot!(output);
+    }
+
+    // ── Scroll tests ────────────────��──────────────────────────
+
+    #[test]
+    fn mouse_scroll_up_increments_offset() {
+        let mut app = make_app();
+        app.focus = Focus::MainArea;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(mouse);
+        assert_eq!(app.scroll_offset, 3);
+        app.handle_mouse(mouse);
+        assert_eq!(app.scroll_offset, 6);
+    }
+
+    #[test]
+    fn mouse_scroll_down_decrements_offset() {
+        let mut app = make_app();
+        app.focus = Focus::MainArea;
+        app.scroll_offset = 10;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(mouse);
+        assert_eq!(app.scroll_offset, 7);
+    }
+
+    #[test]
+    fn mouse_scroll_down_saturates_at_zero() {
+        let mut app = make_app();
+        app.focus = Focus::MainArea;
+        app.scroll_offset = 1;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(mouse);
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn mouse_scroll_ignored_in_sidebar() {
+        let mut app = make_app();
+        app.focus = Focus::Sidebar;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(mouse);
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[tokio::test]
+    async fn typing_resets_scroll_offset() {
+        let mut app = make_app();
+        add_fake_session(&mut app, "s1");
+        app.active_session_id = Some(sid("s1"));
+        app.focus = Focus::MainArea;
+        app.scroll_offset = 20;
+        // Any non-scroll key should reset to 0
+        app.handle_key(KeyEvent::from(KeyCode::Char('a'))).await;
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[tokio::test]
+    async fn pageup_increments_scroll_offset() {
+        let mut app = make_app();
+        app.focus = Focus::MainArea;
+        app.handle_key(KeyEvent::from(KeyCode::PageUp)).await;
+        assert_eq!(app.scroll_offset, 5);
+    }
+
+    #[tokio::test]
+    async fn pagedown_decrements_scroll_offset() {
+        let mut app = make_app();
+        app.focus = Focus::MainArea;
+        app.scroll_offset = 10;
+        app.handle_key(KeyEvent::from(KeyCode::PageDown)).await;
+        assert_eq!(app.scroll_offset, 5);
     }
 }

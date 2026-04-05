@@ -1,0 +1,14 @@
+---
+source: src/tui/main_area.rs
+expression: output
+---
+┌ test-session [+42 lines] ────────────────────────────────┐
+│scrolled content                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

@@ -119,6 +119,31 @@ pub async fn capture_pane(pane_id: &str) -> Result<String> {
     Ok(output.stdout)
 }
 
+/// Capture pane content with scrollback offset.
+///
+/// When `scroll_offset` is 0, captures the current visible content.
+/// When > 0, captures historical lines using tmux's `-S`/`-E` flags.
+pub async fn capture_pane_scrolled(
+    pane_id: &str,
+    scroll_offset: u16,
+    visible_height: u16,
+) -> Result<String> {
+    if scroll_offset == 0 {
+        return capture_pane(pane_id).await;
+    }
+    let start = -(scroll_offset as i32 + visible_height as i32);
+    let end = -(scroll_offset as i32 + 1);
+    let start_str = start.to_string();
+    let end_str = end.to_string();
+    let output = run_tmux(args(&[
+        "capture-pane", "-p", "-e", "-t", pane_id,
+        "-S", &start_str,
+        "-E", &end_str,
+    ]))
+    .await?;
+    Ok(output.stdout)
+}
+
 /// Kill a specific pane by ID.
 pub async fn kill_pane(pane_id: &str) -> Result<()> {
     let output = run_tmux(args(&["kill-pane", "-t", pane_id])).await?;

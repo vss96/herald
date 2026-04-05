@@ -138,6 +138,10 @@ impl SessionManager {
         &self.runtime_dir
     }
 
+    pub fn terminal_rows(&self) -> u16 {
+        self.terminal_rows
+    }
+
     /// Insert a session directly (for testing only).
     #[cfg(test)]
     pub fn insert_test_session(&mut self, session: Session) {

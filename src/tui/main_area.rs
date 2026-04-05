@@ -26,21 +26,28 @@ const HERALD_LOGO: &str = r#"
 pub struct MainArea {
     captured_content: Option<String>,
     title: String,
+    scroll_offset: u16,
 }
 
 impl MainArea {
-    pub fn new(captured_content: Option<String>, title: String) -> Self {
+    pub fn new(captured_content: Option<String>, title: String, scroll_offset: u16) -> Self {
         Self {
             captured_content,
             title,
+            scroll_offset,
         }
     }
 }
 
 impl Widget for MainArea {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let title = if self.scroll_offset > 0 {
+            format!(" {} [+{} lines] ", self.title, self.scroll_offset)
+        } else {
+            format!(" {} ", self.title)
+        };
         let block = Block::default()
-            .title(format!(" {} ", self.title))
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
@@ -90,14 +97,14 @@ mod tests {
 
     #[test]
     fn main_area_empty_large() {
-        let widget = MainArea::new(None, "herald".to_string());
+        let widget = MainArea::new(None, "herald".to_string(), 0);
         let output = render_to_string(widget, 60, 24);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn main_area_empty_small() {
-        let widget = MainArea::new(None, "herald".to_string());
+        let widget = MainArea::new(None, "herald".to_string(), 0);
         let output = render_to_string(widget, 40, 5);
         insta::assert_snapshot!(output);
     }
@@ -105,7 +112,15 @@ mod tests {
     #[test]
     fn main_area_with_plain_text() {
         let content = "hello world\nline 2\nline 3".to_string();
-        let widget = MainArea::new(Some(content), "test-session".to_string());
+        let widget = MainArea::new(Some(content), "test-session".to_string(), 0);
+        let output = render_to_string(widget, 60, 10);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn main_area_scroll_indicator() {
+        let content = "scrolled content".to_string();
+        let widget = MainArea::new(Some(content), "test-session".to_string(), 42);
         let output = render_to_string(widget, 60, 10);
         insta::assert_snapshot!(output);
     }

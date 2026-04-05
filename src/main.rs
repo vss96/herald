@@ -10,7 +10,7 @@ use std::io;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyEvent};
+use crossterm::event::{self, EnableMouseCapture, DisableMouseCapture, Event, KeyEvent, MouseEvent};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ratatui::prelude::*;
@@ -23,6 +23,7 @@ use events::types::HookEvent;
 /// Events the main loop processes.
 enum AppEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Hook(HookEvent),
     Tick,
 }
@@ -110,10 +111,18 @@ fn spawn_keyboard_reader(tx: mpsc::UnboundedSender<AppEvent>) {
         loop {
             // Block on crossterm — this is intentional, it's on its own thread
             if event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
-                if let Ok(Event::Key(key)) = event::read() {
-                    if tx.send(AppEvent::Key(key)).is_err() {
-                        break; // Channel closed, app is shutting down
+                match event::read() {
+                    Ok(Event::Key(key)) => {
+                        if tx.send(AppEvent::Key(key)).is_err() {
+                            break;
+                        }
                     }
+                    Ok(Event::Mouse(mouse)) => {
+                        if tx.send(AppEvent::Mouse(mouse)).is_err() {
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -210,7 +219,7 @@ async fn main() -> Result<()> {
     // Setup terminal
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -257,7 +266,7 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     terminal::disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result
@@ -301,6 +310,9 @@ async fn run_loop(
                 match event {
                     Some(AppEvent::Key(key)) => {
                         app.handle_key(key).await;
+                    }
+                    Some(AppEvent::Mouse(mouse)) => {
+                        app.handle_mouse(mouse);
                     }
                     Some(AppEvent::Hook(hook_event)) => {
                         app.handle_hook_event(hook_event);

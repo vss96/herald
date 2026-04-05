@@ -37,6 +37,8 @@ pub struct SidebarSection {
 #[derive(Debug, Default, Deserialize)]
 pub struct MainAreaSection {
     pub return_to_sidebar: Option<OneOrMany>,
+    pub scroll_up: Option<OneOrMany>,
+    pub scroll_down: Option<OneOrMany>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -88,6 +90,8 @@ pub struct SidebarKeys {
 #[derive(Debug, Clone)]
 pub struct MainAreaKeys {
     pub return_to_sidebar: Vec<KeyEvent>,
+    pub scroll_up: Vec<KeyEvent>,
+    pub scroll_down: Vec<KeyEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +145,14 @@ impl Default for MainAreaKeys {
                 KeyCode::Char('g'),
                 KeyModifiers::CONTROL,
             )],
+            scroll_up: vec![
+                KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::PageUp, KeyModifiers::SHIFT),
+            ],
+            scroll_down: vec![
+                KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT),
+            ],
         }
     }
 }
@@ -189,6 +201,8 @@ pub fn parse_key(s: &str) -> Result<KeyEvent, String> {
         "right" => KeyCode::Right,
         "home" => KeyCode::Home,
         "end" => KeyCode::End,
+        "pageup" | "pgup" => KeyCode::PageUp,
+        "pagedown" | "pgdown" | "pgdn" => KeyCode::PageDown,
         "space" => KeyCode::Char(' '),
         _ if key_part.len() == 1 => KeyCode::Char(key_part.chars().next().unwrap()),
         other => return Err(format!("unknown key: {}", other)),
@@ -222,6 +236,8 @@ pub fn format_key(key: &KeyEvent) -> String {
         KeyCode::Right => "Right".to_string(),
         KeyCode::Home => "Home".to_string(),
         KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PgUp".to_string(),
+        KeyCode::PageDown => "PgDn".to_string(),
         KeyCode::Char(' ') => "Space".to_string(),
         KeyCode::Char(c) => c.to_string(),
         _ => "?".to_string(),
@@ -308,6 +324,8 @@ pub fn load(path: &Path) -> KeyBindings {
                 ma.return_to_sidebar,
                 defaults.main_area.return_to_sidebar,
             ),
+            scroll_up: resolve(ma.scroll_up, defaults.main_area.scroll_up),
+            scroll_down: resolve(ma.scroll_down, defaults.main_area.scroll_down),
         },
         dialog: DialogKeys {
             close: resolve(dl.close, defaults.dialog.close),
