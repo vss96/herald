@@ -37,6 +37,8 @@ pub struct App {
     pub last_keypress: Instant,
     pub should_quit: bool,
     pub runtime_dir: PathBuf,
+    /// Raw captured pane content for the active session (rendered directly)
+    pub captured_content: Option<String>,
     /// Channel for sending events into the main loop (used to spawn hook listeners)
     pub event_tx: Option<mpsc::UnboundedSender<crate::AppEvent>>,
     /// Receiver end — moved into the run_loop
@@ -58,6 +60,7 @@ impl App {
             last_keypress: Instant::now(),
             should_quit: false,
             runtime_dir,
+            captured_content: None,
             event_tx: None,
             event_rx: rx,
             idle_threshold: Duration::from_secs(3),
@@ -372,30 +375,27 @@ impl App {
         }
     }
 
-    /// Refresh the active session's terminal buffer from tmux capture-pane.
+    /// Refresh the active session's pane content from tmux capture-pane.
     pub async fn refresh_active_terminal(&mut self) {
-        // Don't refresh while dialog is open (avoid visual noise)
         if self.focus == Focus::Dialog {
             return;
         }
 
         let Some(ref session_id) = self.active_session_id else {
+            self.captured_content = None;
             return;
         };
         let pane_id = match self.session_manager.get(session_id) {
             Some(s) if !s.tmux_pane_id.is_empty() => s.tmux_pane_id.clone(),
-            _ => return,
+            _ => {
+                self.captured_content = None;
+                return;
+            }
         };
 
         match crate::tmux::commands::capture_pane(&pane_id).await {
             Ok(content) => {
-                if !content.is_empty() {
-                    if let Some(session) = self.session_manager.get_mut(session_id) {
-                        // Clear and re-render the terminal buffer from captured content
-                        session.terminal.process(b"\x1b[2J\x1b[H"); // clear + home
-                        session.terminal.process(content.as_bytes());
-                    }
-                }
+                self.captured_content = if content.is_empty() { None } else { Some(content) };
             }
             Err(e) => {
                 tracing::warn!(pane_id = %pane_id, "capture-pane failed: {}", e);
@@ -512,20 +512,24 @@ impl App {
             .iter()
             .filter_map(|id| self.session_manager.get(id))
             .collect();
-        let sidebar = Sidebar::new(&sessions, self.active_session_id.as_deref());
+        let sidebar = Sidebar::new(
+            &sessions,
+            self.active_session_id.as_deref(),
+            self.sidebar_index,
+            self.focus == Focus::Sidebar,
+        );
         Widget::render(sidebar, sidebar_area, buf);
 
-        // Render main area
-        let (terminal, title) = if let Some(ref id) = self.active_session_id {
-            if let Some(session) = self.session_manager.get(id) {
-                (Some(&session.terminal), session.nickname.clone())
-            } else {
-                (None, "herald".to_string())
-            }
+        // Render main area with raw captured content
+        let title = if let Some(ref id) = self.active_session_id {
+            self.session_manager
+                .get(id)
+                .map(|s| s.nickname.clone())
+                .unwrap_or_else(|| "herald".to_string())
         } else {
-            (None, "herald".to_string())
+            "herald".to_string()
         };
-        let main = MainArea::new(terminal, title);
+        let main = MainArea::new(self.captured_content.clone(), title);
         Widget::render(main, content_area, buf);
 
         // Render dialog overlay if visible
@@ -540,15 +544,29 @@ impl App {
             Focus::Dialog => "NEW SESSION",
         };
         let queue_count = self.attention_queue.len();
-        let status_text = format!(
-            " [{}] | {} sessions | {} need attention | q:quit n:new Tab:switch",
-            focus_label,
-            self.session_manager.session_count(),
-            queue_count,
-        );
+        let bg = Color::Rgb(30, 30, 46); // dark purple-gray
         let status_line = Line::from(vec![
-            Span::styled(status_text, Style::default().fg(Color::White).bg(Color::DarkGray)),
+            Span::styled(" herald ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {} ", focus_label), Style::default().fg(Color::Cyan).bg(bg)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(bg)),
+            Span::styled(
+                format!("{} sessions", self.session_manager.session_count()),
+                Style::default().fg(Color::White).bg(bg),
+            ),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(bg)),
+            if queue_count > 0 {
+                Span::styled(
+                    format!("{} need attention", queue_count),
+                    Style::default().fg(Color::Red).bg(bg).add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled("all clear", Style::default().fg(Color::Green).bg(bg))
+            },
+            Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(bg)),
+            Span::styled("q:quit n:new Esc:sidebar", Style::default().fg(Color::DarkGray).bg(bg)),
         ]);
+        // Fill the rest of the status bar with background
+        buf.set_style(status_area, Style::default().bg(bg));
         buf.set_line(status_area.x, status_area.y, &status_line, status_area.width);
     }
 }

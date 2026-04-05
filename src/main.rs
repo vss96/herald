@@ -254,7 +254,7 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {
-    let mut tick_interval = tokio::time::interval(std::time::Duration::from_millis(50));
+    let mut tick_interval = tokio::time::interval(std::time::Duration::from_millis(150));
 
     loop {
         // Render every tick
