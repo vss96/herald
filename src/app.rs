@@ -10,6 +10,7 @@ use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
 
 use crate::events::queue::AttentionQueue;
+use crate::input::tmux_keys::{self, TmuxKey};
 use crate::events::types::HookEvent;
 use crate::session::manager::SessionManager;
 use crate::session::model::SessionStatus;
@@ -225,18 +226,18 @@ impl App {
         if let Some(ref session_id) = self.active_session_id {
             if let Some(session) = self.session_manager.get(session_id) {
                 let pane_id = session.tmux_pane_id.clone();
-                match crate::input::tmux_keys::map_key(key) {
-                    crate::input::tmux_keys::TmuxKey::Special(k) => {
+                match tmux_keys::map_key(key) {
+                    TmuxKey::Special(k) => {
                         tokio::spawn(async move {
                             let _ = crate::tmux::commands::send_special_key(&pane_id, &k).await;
                         });
                     }
-                    crate::input::tmux_keys::TmuxKey::Literal(s) => {
+                    TmuxKey::Literal(s) => {
                         tokio::spawn(async move {
                             let _ = crate::tmux::commands::send_keys_literal(&pane_id, &s).await;
                         });
                     }
-                    crate::input::tmux_keys::TmuxKey::Ignored => {}
+                    TmuxKey::Ignored => {}
                 }
             }
         }
