@@ -215,18 +215,23 @@ impl App {
     }
 
     fn handle_main_area_key(&mut self, key: KeyEvent) {
-        // Esc always returns to sidebar
-        if key.code == KeyCode::Esc {
+        // Ctrl+G returns to sidebar (like tmux's Ctrl+B prefix concept)
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
             self.focus = Focus::Sidebar;
             return;
         }
 
-        // Forward all other keys to the active tmux pane
+        // Forward all keys to the active tmux pane (including Esc)
         if let Some(ref session_id) = self.active_session_id {
             if let Some(session) = self.session_manager.get(session_id) {
                 let pane_id = session.tmux_pane_id.clone();
                 // Spawn the send as a background task (non-blocking)
                 match key.code {
+                    KeyCode::Esc => {
+                        tokio::spawn(async move {
+                            let _ = crate::tmux::commands::send_special_key(&pane_id, "Escape").await;
+                        });
+                    }
                     KeyCode::Enter => {
                         tokio::spawn(async move {
                             let _ = crate::tmux::commands::send_special_key(&pane_id, "Enter").await;
@@ -698,7 +703,7 @@ impl App {
                 Span::styled("all clear", Style::default().fg(Color::Green).bg(bg))
             },
             Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(bg)),
-            Span::styled("q:quit n:new x:kill Esc:sidebar", Style::default().fg(Color::DarkGray).bg(bg)),
+            Span::styled("q:quit n:new x:kill C-g:sidebar", Style::default().fg(Color::DarkGray).bg(bg)),
         ]);
         // Fill the rest of the status bar with background
         buf.set_style(status_area, Style::default().bg(bg));
@@ -802,11 +807,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn esc_returns_to_sidebar_from_main() {
+    async fn ctrl_g_returns_to_sidebar_from_main() {
+        let mut app = make_app();
+        app.focus = Focus::MainArea;
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)).await;
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[tokio::test]
+    async fn esc_in_main_area_does_not_change_focus() {
         let mut app = make_app();
         app.focus = Focus::MainArea;
         app.handle_key(KeyEvent::from(KeyCode::Esc)).await;
-        assert_eq!(app.focus, Focus::Sidebar);
+        assert_eq!(app.focus, Focus::MainArea);
     }
 
     #[test]
