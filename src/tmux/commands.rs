@@ -113,9 +113,9 @@ pub async fn kill_session(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Capture the visible content of a pane as plain text.
+/// Capture the visible content of a pane with ANSI color escape sequences.
 pub async fn capture_pane(pane_id: &str) -> Result<String> {
-    let output = run_tmux(args(&["capture-pane", "-p", "-t", pane_id])).await?;
+    let output = run_tmux(args(&["capture-pane", "-p", "-e", "-t", pane_id])).await?;
     Ok(output.stdout)
 }
 

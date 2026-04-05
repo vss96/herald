@@ -1,9 +1,10 @@
+use ansi_to_tui::IntoText;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
-/// Main area widget that renders captured pane content.
+/// Main area widget that renders captured pane content with colors.
 pub struct MainArea {
     captured_content: Option<String>,
     title: String,
@@ -37,7 +38,9 @@ impl Widget for MainArea {
             return;
         };
 
-        let paragraph = Paragraph::new(content).block(block);
+        // Parse ANSI escape sequences into styled ratatui Text
+        let text = content.into_text().unwrap_or_default();
+        let paragraph = Paragraph::new(text).block(block);
         Widget::render(paragraph, area, buf);
     }
 }
