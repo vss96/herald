@@ -500,24 +500,27 @@ impl App {
         }
     }
 
-    /// Auto-switch to the highest priority session needing attention.
+    /// Auto-switch to a session that needs attention.
+    /// Only switches if: user is idle AND not manually viewing a session.
+    /// This prevents yanking the user away from a session they deliberately selected.
     fn try_auto_switch(&mut self) {
         if self.focus == Focus::Dialog {
             return;
         }
+        // Don't auto-switch if user is in the main area (they chose to be there)
+        if self.focus == Focus::MainArea {
+            return;
+        }
+        // Only auto-switch if user is idle
+        if !self.is_idle() {
+            return;
+        }
         if let Some(entry) = self.attention_queue.peek() {
-            let needs_switch = self.active_session_id.as_deref() != Some(&entry.session_id);
-            if needs_switch {
-                self.active_session_id = Some(entry.session_id.clone());
-                // Also update sidebar index to match
-                if let Some(idx) = self.session_ids().iter().position(|id| id == &entry.session_id) {
-                    self.sidebar_index = idx;
-                }
-                // Only auto-focus main area if user is idle
-                if self.is_idle() {
-                    self.focus = Focus::MainArea;
-                }
+            self.active_session_id = Some(entry.session_id.clone());
+            if let Some(idx) = self.session_ids().iter().position(|id| id == &entry.session_id) {
+                self.sidebar_index = idx;
             }
+            self.focus = Focus::MainArea;
         }
     }
 
@@ -831,17 +834,18 @@ mod tests {
     }
 
     #[test]
-    fn no_auto_focus_when_typing() {
+    fn no_auto_switch_when_not_idle() {
         let mut app = make_app();
         add_fake_session(&mut app, "s1");
-        app.last_keypress = Instant::now();
+        app.last_keypress = Instant::now(); // just typed = not idle
         app.focus = Focus::Sidebar;
 
         let event = make_hook("s1", HookEventName::PermissionRequest);
         app.handle_hook_event(event);
 
-        // Should set active_session_id but NOT switch focus to main area
-        assert_eq!(app.active_session_id, Some("s1".to_string()));
+        // Event enters queue but no auto-switch (user is active)
+        assert_eq!(app.attention_queue.len(), 1);
+        assert!(app.active_session_id.is_none());
         assert_eq!(app.focus, Focus::Sidebar);
     }
 
