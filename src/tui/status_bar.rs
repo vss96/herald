@@ -45,3 +45,37 @@ impl<'a> Widget for StatusBar<'a> {
         buf.set_line(area.x, area.y, &line, area.width);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::test_helpers::render_to_string;
+
+    #[test]
+    fn status_bar_all_clear() {
+        let widget = StatusBar::new("SIDEBAR", 3, 0);
+        let output = render_to_string(widget, 80, 1);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn status_bar_with_attention() {
+        let widget = StatusBar::new("TERMINAL", 5, 2);
+        let output = render_to_string(widget, 80, 1);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn status_bar_zero_sessions() {
+        let widget = StatusBar::new("SIDEBAR", 0, 0);
+        let output = render_to_string(widget, 80, 1);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn status_bar_dialog_mode() {
+        let widget = StatusBar::new("NEW SESSION", 1, 0);
+        let output = render_to_string(widget, 80, 1);
+        insta::assert_snapshot!(output);
+    }
+}

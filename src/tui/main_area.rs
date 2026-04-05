@@ -82,3 +82,31 @@ impl Widget for MainArea {
         Widget::render(paragraph, area, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::test_helpers::render_to_string;
+
+    #[test]
+    fn main_area_empty_large() {
+        let widget = MainArea::new(None, "herald".to_string());
+        let output = render_to_string(widget, 60, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn main_area_empty_small() {
+        let widget = MainArea::new(None, "herald".to_string());
+        let output = render_to_string(widget, 40, 5);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn main_area_with_plain_text() {
+        let content = "hello world\nline 2\nline 3".to_string();
+        let widget = MainArea::new(Some(content), "test-session".to_string());
+        let output = render_to_string(widget, 60, 10);
+        insta::assert_snapshot!(output);
+    }
+}

@@ -1,0 +1,5 @@
+---
+source: src/tui/status_bar.rs
+expression: output
+---
+ herald  TERMINAL  | 5 sessions | 2 need attention | q:quit n:new x:kill C-g:sid

@@ -1,0 +1,16 @@
+---
+source: src/tui/sidebar.rs
+expression: output
+---
+┌ Sessions (5) ──────────────┐
+│ ○ starting [starting]      │
+│ ◐ running [running]        │
+│▸● needs-input [needs input]│
+│ ✓ stopped [stopped]        │
+│ ✗ errored [error]          │
+│                            │
+│                            │
+│                            │
+│                            │
+│                            │
+└────────────────────────────┘

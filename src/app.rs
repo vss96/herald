@@ -597,4 +597,60 @@ mod tests {
         // Should NOT auto-switch while in dialog
         assert!(app.active_session_id.is_none());
     }
+
+    // ── Snapshot tests ──────────────────────────────────────────
+
+    fn render_app(app: &App) -> String {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use crate::tui::test_helpers::buffer_to_string;
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        app.render(area, &mut buf);
+        buffer_to_string(&buf)
+    }
+
+    #[test]
+    fn app_initial_render() {
+        let app = make_app();
+        let output = render_app(&app);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn app_with_sessions() {
+        use crate::session::model::SessionStatus;
+        let mut app = make_app();
+        add_fake_session(&mut app, "s1");
+        add_fake_session(&mut app, "s2");
+        // Set s1 to running, s2 to needs-attention
+        if let Some(s) = app.session_manager.get_mut("s1") {
+            s.status = SessionStatus::Running { last_activity: Instant::now() };
+        }
+        if let Some(s) = app.session_manager.get_mut("s2") {
+            s.status = SessionStatus::NeedsAttention {
+                reason: crate::session::model::AttentionReason::PermissionPrompt {
+                    tool_name: "Edit".into(),
+                    tool_use_id: None,
+                },
+                since: Instant::now(),
+            };
+        }
+        app.active_session_id = Some("s1".to_string());
+        app.focus = Focus::Sidebar;
+        let output = render_app(&app);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn app_dialog_overlay() {
+        let mut app = make_app();
+        add_fake_session(&mut app, "s1");
+        app.focus = Focus::Dialog;
+        app.dialog.visible = true;
+        app.dialog.nickname.set("new-task".into());
+        let output = render_app(&app);
+        insta::assert_snapshot!(output);
+    }
 }

@@ -1,0 +1,5 @@
+---
+source: src/tui/status_bar.rs
+expression: output
+---
+ herald  SIDEBAR  | 0 sessions | all clear | q:quit n:new x:kill C-g:sidebar

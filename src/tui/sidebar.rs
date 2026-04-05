@@ -178,3 +178,72 @@ fn session_style(status: &SessionStatus) -> (&'static str, Color) {
         SessionStatus::Error { .. } => ("✗", RED),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::test_helpers::*;
+    use std::time::Instant;
+
+    #[test]
+    fn sidebar_empty() {
+        let sessions: Vec<&Session> = vec![];
+        let widget = Sidebar::new(&sessions, None, 0, true);
+        let output = render_to_string(widget, 30, 10);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn sidebar_single_starting() {
+        let s = make_test_session("s1", "my-session", SessionStatus::Starting);
+        let sessions: Vec<&Session> = vec![&s];
+        let widget = Sidebar::new(&sessions, Some("s1"), 0, true);
+        let output = render_to_string(widget, 30, 10);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn sidebar_multiple_statuses() {
+        let s1 = make_test_session("s1", "starting", SessionStatus::Starting);
+        let s2 = running_session("s2", "running");
+        let s3 = attention_session("s3", "needs-input", AttentionReason::PermissionPrompt {
+            tool_name: "Edit".into(),
+            tool_use_id: None,
+        });
+        let s4 = make_test_session("s4", "stopped", SessionStatus::Stopped { exit_code: Some(0) });
+        let s5 = make_test_session("s5", "errored", SessionStatus::Error {
+            message: "crash".into(),
+        });
+        let sessions: Vec<&Session> = vec![&s1, &s2, &s3, &s4, &s5];
+        // s2 selected (index 1), s3 active
+        let widget = Sidebar::new(&sessions, Some("s3"), 1, true);
+        let output = render_to_string(widget, 30, 12);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn sidebar_unfocused() {
+        let s1 = running_session("s1", "session-a");
+        let s2 = running_session("s2", "session-b");
+        let sessions: Vec<&Session> = vec![&s1, &s2];
+        let widget = Sidebar::new(&sessions, Some("s1"), 0, false);
+        let output = render_to_string(widget, 30, 10);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn sidebar_attention_border_is_red() {
+        let s = attention_session("s1", "alert", AttentionReason::ToolError {
+            tool_name: "Bash".into(),
+            error: "fail".into(),
+        });
+        let sessions: Vec<&Session> = vec![&s];
+        let widget = Sidebar::new(&sessions, None, 0, true);
+        let area = Rect::new(0, 0, 30, 8);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        widget.render(area, &mut buf);
+        // Border top-left corner should be RED
+        let corner = buf.cell((0, 0)).unwrap();
+        assert_eq!(corner.fg, RED);
+    }
+}

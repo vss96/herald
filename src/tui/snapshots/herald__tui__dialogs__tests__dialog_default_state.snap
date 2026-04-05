@@ -1,0 +1,21 @@
+---
+source: src/tui/dialogs.rs
+expression: output
+---
+
+
+
+
+
+
+          ┌ New Session ─────────────────────────────────────────────┐
+          │ Nickname:                                                │
+          │                                                          │
+          │ Directory:                                               │
+          │                                                          │
+          │ Prompt:                                                  │
+          │                                                          │
+          │                                                          │
+          │                                                          │
+          │ Enter:next  Tab:next field  Esc:cancel                   │
+          └──────────────────────────────────────────────────────────┘

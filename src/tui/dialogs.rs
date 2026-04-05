@@ -397,4 +397,38 @@ mod tests {
         let strings = vec!["alpha".to_string(), "beta".to_string()];
         assert_eq!(longest_common_prefix(&strings), None);
     }
+
+    #[test]
+    fn dialog_default_state() {
+        use crate::tui::test_helpers::buffer_to_string;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut dialog = NewSessionDialog::default();
+        dialog.visible = true;
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        Widget::render(&dialog, area, &mut buf);
+        let output = buffer_to_string(&buf);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn dialog_with_input() {
+        use crate::tui::test_helpers::buffer_to_string;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut dialog = NewSessionDialog::default();
+        dialog.visible = true;
+        dialog.nickname.set("my-session".into());
+        dialog.working_dir.set("/home/user/project".into());
+        dialog.prompt.set("fix the tests".into());
+        dialog.active_field = DialogField::Prompt;
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        Widget::render(&dialog, area, &mut buf);
+        let output = buffer_to_string(&buf);
+        insta::assert_snapshot!(output);
+    }
 }

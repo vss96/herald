@@ -3,3 +3,6 @@ pub mod sidebar;
 pub mod main_area;
 pub mod dialogs;
 pub mod status_bar;
+
+#[cfg(test)]
+pub mod test_helpers;

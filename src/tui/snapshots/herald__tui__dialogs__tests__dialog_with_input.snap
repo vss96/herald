@@ -1,0 +1,21 @@
+---
+source: src/tui/dialogs.rs
+expression: output
+---
+
+
+
+
+
+
+          ┌ New Session ─────────────────────────────────────────────┐
+          │ Nickname:                                                │
+          │  my-session                                              │
+          │ Directory:                                               │
+          │  /home/user/project                                      │
+          │ Prompt:                                                  │
+          │  fix the tests                                           │
+          │                                                          │
+          │                                                          │
+          │ Enter:launch  Tab:next field  Esc:cancel                 │
+          └──────────────────────────────────────────────────────────┘
