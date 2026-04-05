@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod events;
 mod input;
 mod session;
@@ -214,7 +215,11 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let size = terminal.size()?;
-    let mut app = App::new(rt_dir.clone(), size.width, size.height);
+    let config_path = std::env::current_dir()
+        .unwrap_or_default()
+        .join("herald.toml");
+    let keybindings = config::load(&config_path);
+    let mut app = App::new(rt_dir.clone(), size.width, size.height, keybindings);
 
     // Try to discover existing sessions
     match app.session_manager.ensure_tmux_session().await {

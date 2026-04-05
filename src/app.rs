@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
 
+use crate::config::{self, KeyBindings};
 use crate::events::queue::AttentionQueue;
 use crate::events::types::HookEvent;
 use crate::input::batcher::KeyBatcher;
@@ -47,11 +48,17 @@ pub struct App {
     pub event_rx: mpsc::UnboundedReceiver<crate::AppEvent>,
     /// Batches literal keystrokes to reduce tmux process spawns.
     pub key_batcher: KeyBatcher,
+    pub keybindings: KeyBindings,
     idle_threshold: Duration,
 }
 
 impl App {
-    pub fn new(runtime_dir: PathBuf, terminal_cols: u16, terminal_rows: u16) -> Self {
+    pub fn new(
+        runtime_dir: PathBuf,
+        terminal_cols: u16,
+        terminal_rows: u16,
+        keybindings: KeyBindings,
+    ) -> Self {
         // Create a dummy channel — main() will replace event_tx
         let (_tx, rx) = mpsc::unbounded_channel();
         Self {
@@ -69,6 +76,7 @@ impl App {
             event_tx: None,
             event_rx: rx,
             key_batcher: KeyBatcher::new(),
+            keybindings,
             idle_threshold: Duration::from_secs(3),
         }
     }
@@ -118,74 +126,62 @@ impl App {
         match self.focus {
             Focus::MainArea => self.handle_main_area_key(key),
             Focus::Dialog => self.handle_dialog_key(key).await,
-            Focus::Sidebar => {
-                // Ctrl-C quits herald only from sidebar
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                    self.should_quit = true;
-                    return;
-                }
-                self.handle_sidebar_key(key);
-            }
+            Focus::Sidebar => self.handle_sidebar_key(key),
         }
     }
 
     fn handle_sidebar_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('n') => {
-                self.dialog.visible = true;
-                self.dialog.working_dir.set(
-                    std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
-                );
-                self.focus = Focus::Dialog;
+        let kb = &self.keybindings.sidebar;
+        if config::key_matches(&key, &kb.force_quit) || config::key_matches(&key, &kb.quit) {
+            self.should_quit = true;
+        } else if config::key_matches(&key, &kb.new_session) {
+            self.dialog.visible = true;
+            self.dialog.working_dir.set(
+                std::env::current_dir()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+            );
+            self.dialog.key_labels = crate::tui::dialogs::DialogKeyLabels {
+                submit: config::format_key(&self.keybindings.dialog.submit[0]),
+                next_field: config::format_key(&self.keybindings.dialog.next_field[0]),
+                close: config::format_key(&self.keybindings.dialog.close[0]),
+            };
+            self.focus = Focus::Dialog;
+        } else if config::key_matches(&key, &kb.move_down) {
+            let count = self.session_manager.session_count();
+            if count > 0 {
+                self.sidebar_index = (self.sidebar_index + 1) % count;
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                let count = self.session_manager.session_count();
-                if count > 0 {
-                    self.sidebar_index = (self.sidebar_index + 1) % count;
-                }
+        } else if config::key_matches(&key, &kb.move_up) {
+            let count = self.session_manager.session_count();
+            if count > 0 {
+                self.sidebar_index = (self.sidebar_index + count - 1) % count;
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                let count = self.session_manager.session_count();
-                if count > 0 {
-                    self.sidebar_index = (self.sidebar_index + count - 1) % count;
-                }
+        } else if config::key_matches(&key, &kb.select_session) {
+            if let Some(session) = self.session_ids().get(self.sidebar_index) {
+                self.active_session_id = Some(session.clone());
+                self.captured_content = None;
+                self.focus = Focus::MainArea;
             }
-            KeyCode::Enter => {
-                // Focus the selected session in main area
-                if let Some(session) = self.session_ids().get(self.sidebar_index) {
-                    self.active_session_id = Some(session.clone());
-                    self.captured_content = None; // Force refresh on next tick
-                    self.focus = Focus::MainArea;
-                }
+        } else if config::key_matches(&key, &kb.switch_to_main) {
+            if self.active_session_id.is_some() {
+                self.focus = Focus::MainArea;
             }
-            KeyCode::Tab => {
-                if self.active_session_id.is_some() {
-                    self.focus = Focus::MainArea;
-                }
+        } else if config::key_matches(&key, &kb.dismiss) {
+            if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
+                self.attention_queue.dismiss_completion(&id);
+                self.attention_queue.dismiss_error(&id);
             }
-            KeyCode::Char('d') => {
-                // Dismiss completion/error for selected session
-                if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
-                    self.attention_queue.dismiss_completion(&id);
-                    self.attention_queue.dismiss_error(&id);
-                }
+        } else if config::key_matches(&key, &kb.kill_session) {
+            if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
+                self.pending_kill = Some(id);
             }
-            KeyCode::Char('x') | KeyCode::Delete => {
-                // Kill the selected session
-                if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
-                    self.pending_kill = Some(id);
-                }
-            }
-            _ => {}
         }
     }
 
     fn handle_main_area_key(&mut self, key: KeyEvent) {
-        // Ctrl+G returns to sidebar (like tmux's Ctrl+B prefix concept)
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+        // Configurable key returns to sidebar (default: Ctrl+G)
+        if config::key_matches(&key, &self.keybindings.main_area.return_to_sidebar) {
             self.flush_key_batch();
             self.focus = Focus::Sidebar;
             return;
@@ -239,23 +235,20 @@ impl App {
     }
 
     async fn handle_dialog_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc => {
-                self.dialog.reset();
-                self.focus = Focus::Sidebar;
+        let dk = &self.keybindings.dialog;
+        if config::key_matches(&key, &dk.close) {
+            self.dialog.reset();
+            self.focus = Focus::Sidebar;
+        } else if config::key_matches(&key, &dk.next_field) {
+            if self.dialog.active_field == crate::tui::dialogs::DialogField::WorkingDir {
+                self.dialog.complete_directory_path();
+            } else {
+                self.dialog.next_field();
             }
-            KeyCode::Tab => {
-                // Tab on directory field: path completion
-                if self.dialog.active_field == crate::tui::dialogs::DialogField::WorkingDir {
-                    self.dialog.complete_directory_path();
-                } else {
-                    self.dialog.next_field();
-                }
-            }
-            KeyCode::Enter => {
-                if self.dialog.active_field == crate::tui::dialogs::DialogField::Prompt
-                    && self.dialog.is_valid()
-                {
+        } else if config::key_matches(&key, &dk.submit) {
+            if self.dialog.active_field == crate::tui::dialogs::DialogField::Prompt
+                && self.dialog.is_valid()
+            {
                     // Submit on last field when valid
                     let nickname = self.dialog.nickname.text.clone();
                     let prompt = self.dialog.prompt.text.clone();
@@ -287,33 +280,21 @@ impl App {
                             tracing::error!("failed to launch session: {}", e);
                         }
                     }
-                } else {
-                    // Enter advances to the next field
-                    self.dialog.next_field();
-                }
+            } else {
+                self.dialog.next_field();
             }
-            KeyCode::Backspace => {
-                self.dialog.active_input().backspace();
+        } else {
+            // Standard text editing keys (not configurable)
+            match key.code {
+                KeyCode::Backspace => self.dialog.active_input().backspace(),
+                KeyCode::Delete => self.dialog.active_input().delete(),
+                KeyCode::Left => self.dialog.active_input().move_left(),
+                KeyCode::Right => self.dialog.active_input().move_right(),
+                KeyCode::Home => self.dialog.active_input().home(),
+                KeyCode::End => self.dialog.active_input().end(),
+                KeyCode::Char(c) => self.dialog.active_input().insert(c),
+                _ => {}
             }
-            KeyCode::Delete => {
-                self.dialog.active_input().delete();
-            }
-            KeyCode::Left => {
-                self.dialog.active_input().move_left();
-            }
-            KeyCode::Right => {
-                self.dialog.active_input().move_right();
-            }
-            KeyCode::Home => {
-                self.dialog.active_input().home();
-            }
-            KeyCode::End => {
-                self.dialog.active_input().end();
-            }
-            KeyCode::Char(c) => {
-                self.dialog.active_input().insert(c);
-            }
-            _ => {}
         }
     }
 
@@ -481,8 +462,15 @@ impl App {
         let attention_count = self.attention_queue.entries_sorted().iter()
             .filter(|e| self.session_manager.get(&e.session_id).is_some())
             .count();
+        let hints = format!(
+            "{}:quit {}:new {}:kill {}:sidebar",
+            config::format_key(&self.keybindings.sidebar.quit[0]),
+            config::format_key(&self.keybindings.sidebar.new_session[0]),
+            config::format_key(&self.keybindings.sidebar.kill_session[0]),
+            config::format_key(&self.keybindings.main_area.return_to_sidebar[0]),
+        );
         let status_bar = crate::tui::status_bar::StatusBar::new(
-            focus_label, self.session_manager.session_count(), attention_count,
+            focus_label, self.session_manager.session_count(), attention_count, &hints,
         );
         Widget::render(status_bar, status_area, buf);
     }
@@ -494,7 +482,12 @@ mod tests {
     use crate::events::types::{HookEvent, HookEventName};
 
     fn make_app() -> App {
-        App::new(PathBuf::from("/tmp/herald-test"), 80, 24)
+        App::new(
+            PathBuf::from("/tmp/herald-test"),
+            80,
+            24,
+            crate::config::KeyBindings::default(),
+        )
     }
 
     fn sid(s: &str) -> SessionId {
@@ -632,6 +625,43 @@ mod tests {
 
         // Should NOT auto-switch while in dialog
         assert!(app.active_session_id.is_none());
+    }
+
+    // ── Custom keybinding tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn custom_quit_key() {
+        let mut kb = crate::config::KeyBindings::default();
+        kb.sidebar.quit = vec![KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE)];
+        let mut app = App::new(
+            PathBuf::from("/tmp/herald-test"),
+            80, 24, kb,
+        );
+        // Default 'q' should no longer quit
+        app.handle_key(KeyEvent::from(KeyCode::Char('q'))).await;
+        assert!(!app.should_quit);
+        // Custom 'Q' should quit
+        app.handle_key(KeyEvent::from(KeyCode::Char('Q'))).await;
+        assert!(app.should_quit);
+    }
+
+    #[tokio::test]
+    async fn custom_return_to_sidebar() {
+        let mut kb = crate::config::KeyBindings::default();
+        kb.main_area.return_to_sidebar = vec![
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        ];
+        let mut app = App::new(
+            PathBuf::from("/tmp/herald-test"),
+            80, 24, kb,
+        );
+        app.focus = Focus::MainArea;
+        // Default Ctrl+G should NOT return to sidebar
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)).await;
+        assert_eq!(app.focus, Focus::MainArea);
+        // Custom Ctrl+B should return to sidebar
+        app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)).await;
+        assert_eq!(app.focus, Focus::Sidebar);
     }
 
     // ── Snapshot tests ──────────────────────────────────────────

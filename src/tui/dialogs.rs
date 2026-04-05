@@ -92,6 +92,26 @@ pub struct NewSessionDialog {
     pub working_dir: TextInput,
     pub active_field: DialogField,
     pub visible: bool,
+    /// Formatted key labels for the footer (e.g., "Enter", "Tab", "Esc").
+    pub key_labels: DialogKeyLabels,
+}
+
+/// Pre-formatted key names for dialog footer help text.
+#[derive(Debug, Clone)]
+pub struct DialogKeyLabels {
+    pub submit: String,
+    pub next_field: String,
+    pub close: String,
+}
+
+impl Default for DialogKeyLabels {
+    fn default() -> Self {
+        Self {
+            submit: "Enter".to_string(),
+            next_field: "Tab".to_string(),
+            close: "Esc".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -270,12 +290,13 @@ impl Widget for &NewSessionDialog {
         // Footer — context-sensitive help
         let footer_y = dialog_area.y + dialog_area.height - 1;
         if footer_y > dialog_area.y {
+            let kl = &self.key_labels;
             let help = if self.active_field == DialogField::WorkingDir {
-                " Enter:next  Tab:complete path  Esc:cancel"
+                format!(" {}:next  {}:complete path  {}:cancel", kl.submit, kl.next_field, kl.close)
             } else if self.active_field == DialogField::Prompt {
-                " Enter:launch  Tab:next field  Esc:cancel"
+                format!(" {}:launch  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close)
             } else {
-                " Enter:next  Tab:next field  Esc:cancel"
+                format!(" {}:next  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close)
             };
             buf.set_string(
                 inner.x,

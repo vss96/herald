@@ -10,11 +10,12 @@ pub struct StatusBar<'a> {
     focus_label: &'a str,
     session_count: usize,
     attention_count: usize,
+    hints: &'a str,
 }
 
 impl<'a> StatusBar<'a> {
-    pub fn new(focus_label: &'a str, session_count: usize, attention_count: usize) -> Self {
-        Self { focus_label, session_count, attention_count }
+    pub fn new(focus_label: &'a str, session_count: usize, attention_count: usize, hints: &'a str) -> Self {
+        Self { focus_label, session_count, attention_count, hints }
     }
 }
 
@@ -39,7 +40,7 @@ impl<'a> Widget for StatusBar<'a> {
             Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(BG)),
             attention_span,
             Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(BG)),
-            Span::styled("q:quit n:new x:kill C-g:sidebar", Style::default().fg(Color::DarkGray).bg(BG)),
+            Span::styled(self.hints, Style::default().fg(Color::DarkGray).bg(BG)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);
@@ -53,28 +54,28 @@ mod tests {
 
     #[test]
     fn status_bar_all_clear() {
-        let widget = StatusBar::new("SIDEBAR", 3, 0);
+        let widget = StatusBar::new("SIDEBAR", 3, 0, "q:quit n:new x:kill C-g:sidebar");
         let output = render_to_string(widget, 80, 1);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn status_bar_with_attention() {
-        let widget = StatusBar::new("TERMINAL", 5, 2);
+        let widget = StatusBar::new("TERMINAL", 5, 2, "q:quit n:new x:kill C-g:sidebar");
         let output = render_to_string(widget, 80, 1);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn status_bar_zero_sessions() {
-        let widget = StatusBar::new("SIDEBAR", 0, 0);
+        let widget = StatusBar::new("SIDEBAR", 0, 0, "q:quit n:new x:kill C-g:sidebar");
         let output = render_to_string(widget, 80, 1);
         insta::assert_snapshot!(output);
     }
 
     #[test]
     fn status_bar_dialog_mode() {
-        let widget = StatusBar::new("NEW SESSION", 1, 0);
+        let widget = StatusBar::new("NEW SESSION", 1, 0, "q:quit n:new x:kill C-g:sidebar");
         let output = render_to_string(widget, 80, 1);
         insta::assert_snapshot!(output);
     }
