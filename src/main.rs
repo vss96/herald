@@ -289,6 +289,9 @@ async fn run_loop(
             }
         }
 
+        // Process pending async actions
+        app.process_pending_kill().await;
+
         if app.should_quit {
             break;
         }

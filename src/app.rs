@@ -39,6 +39,8 @@ pub struct App {
     pub runtime_dir: PathBuf,
     /// Raw captured pane content for the active session (rendered directly)
     pub captured_content: Option<String>,
+    /// Session ID pending kill (processed async in the event loop)
+    pub pending_kill: Option<String>,
     /// Channel for sending events into the main loop (used to spawn hook listeners)
     pub event_tx: Option<mpsc::UnboundedSender<crate::AppEvent>>,
     /// Receiver end — moved into the run_loop
@@ -61,6 +63,7 @@ impl App {
             should_quit: false,
             runtime_dir,
             captured_content: None,
+            pending_kill: None,
             event_tx: None,
             event_rx: rx,
             idle_threshold: Duration::from_secs(3),
@@ -188,6 +191,12 @@ impl App {
                 if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
                     self.attention_queue.dismiss_completion(&id);
                     self.attention_queue.dismiss_error(&id);
+                }
+            }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                // Kill the selected session
+                if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
+                    self.pending_kill = Some(id);
                 }
             }
             _ => {}
@@ -372,6 +381,31 @@ impl App {
             if let Some(common) = longest_common_prefix(&names) {
                 self.dialog.working_dir = common;
             }
+        }
+    }
+
+    /// Process any pending session kill.
+    pub async fn process_pending_kill(&mut self) {
+        let Some(id) = self.pending_kill.take() else {
+            return;
+        };
+        tracing::info!(session_id = %id, "killing session");
+        if let Err(e) = self.session_manager.kill(&id).await {
+            tracing::error!(session_id = %id, "failed to kill session: {}", e);
+        }
+        self.attention_queue.dismiss_error(&id);
+        self.attention_queue.dismiss_completion(&id);
+
+        // Fix active session and sidebar index
+        if self.active_session_id.as_deref() == Some(&id) {
+            self.active_session_id = self.session_ids().first().cloned();
+            self.captured_content = None;
+        }
+        let count = self.session_manager.session_count();
+        if count > 0 {
+            self.sidebar_index = self.sidebar_index.min(count - 1);
+        } else {
+            self.sidebar_index = 0;
         }
     }
 
@@ -588,7 +622,7 @@ impl App {
                 Span::styled("all clear", Style::default().fg(Color::Green).bg(bg))
             },
             Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(bg)),
-            Span::styled("q:quit n:new Esc:sidebar", Style::default().fg(Color::DarkGray).bg(bg)),
+            Span::styled("q:quit n:new x:kill Esc:sidebar", Style::default().fg(Color::DarkGray).bg(bg)),
         ]);
         // Fill the rest of the status bar with background
         buf.set_style(status_area, Style::default().bg(bg));
