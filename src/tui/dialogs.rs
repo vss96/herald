@@ -170,7 +170,7 @@ impl NewSessionDialog {
 
         let mut matches: Vec<PathBuf> = entries
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map_or(false, |ft| ft.is_dir()))
+            .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()))
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
                 if name.starts_with('.') && !prefix.starts_with('.') {

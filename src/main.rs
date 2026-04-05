@@ -7,7 +7,7 @@ mod tmux;
 mod tui;
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, EnableMouseCapture, DisableMouseCapture, Event, KeyEvent, MouseEvent};
@@ -25,7 +25,6 @@ enum AppEvent {
     Key(KeyEvent),
     Mouse(MouseEvent),
     Hook(HookEvent),
-    Tick,
 }
 
 /// Get the current user's UID.
@@ -46,7 +45,7 @@ fn runtime_dir() -> PathBuf {
 }
 
 /// Ensure runtime directory exists with correct permissions.
-fn ensure_runtime_dir(dir: &PathBuf) -> Result<()> {
+fn ensure_runtime_dir(dir: &Path) -> Result<()> {
     if !dir.exists() {
         std::fs::create_dir_all(dir).context("creating runtime directory")?;
         #[cfg(unix)]
@@ -92,7 +91,7 @@ fn ensure_runtime_dir(dir: &PathBuf) -> Result<()> {
 }
 
 /// Install the hook script to the runtime directory.
-fn install_hook_script(runtime_dir: &PathBuf) -> Result<PathBuf> {
+fn install_hook_script(runtime_dir: &Path) -> Result<PathBuf> {
     let hook_path = runtime_dir.join("herald-hook.py");
     let script = include_str!("../scripts/herald-hook.py");
     std::fs::write(&hook_path, script).context("writing hook script")?;
@@ -131,8 +130,8 @@ fn spawn_keyboard_reader(tx: mpsc::UnboundedSender<AppEvent>) {
 
 /// Spawn a hook listener for a session, forwarding events to the channel.
 /// Drains any buffered events first (from before the socket was listening).
-pub fn spawn_hook_listener(
-    runtime_dir: &PathBuf,
+pub(crate) fn spawn_hook_listener(
+    runtime_dir: &Path,
     session_id: &session::model::SessionId,
     tx: mpsc::UnboundedSender<AppEvent>,
 ) {
@@ -228,7 +227,7 @@ async fn main() -> Result<()> {
         .unwrap_or_default()
         .join("herald.toml");
     let keybindings = config::load(&config_path);
-    let mut app = App::new(rt_dir.clone(), size.width, size.height, keybindings);
+    let mut app = App::new(rt_dir.clone(), size.height, keybindings);
 
     // Try to discover existing sessions
     match app.session_manager.ensure_tmux_session().await {
@@ -317,7 +316,6 @@ async fn run_loop(
                     Some(AppEvent::Hook(hook_event)) => {
                         app.handle_hook_event(hook_event);
                     }
-                    Some(AppEvent::Tick) => {}
                     None => break,
                 }
             }

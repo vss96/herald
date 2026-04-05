@@ -4,8 +4,6 @@ use std::time::Instant;
 
 use serde::Deserialize;
 
-use crate::session::terminal::TerminalBuffer;
-
 /// Strongly-typed session identifier (UUID string).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct SessionId(pub String);
@@ -81,7 +79,6 @@ pub struct Session {
     pub working_dir: PathBuf,
     pub status: SessionStatus,
     pub created_at: Instant,
-    pub terminal: TerminalBuffer,
 }
 
 impl Session {
@@ -90,8 +87,6 @@ impl Session {
         nickname: String,
         prompt: String,
         working_dir: PathBuf,
-        terminal_cols: u16,
-        terminal_rows: u16,
     ) -> Self {
         Self {
             id,
@@ -101,15 +96,7 @@ impl Session {
             working_dir,
             status: SessionStatus::Starting,
             created_at: Instant::now(),
-            terminal: TerminalBuffer::new(terminal_cols, terminal_rows),
         }
-    }
-
-    pub fn is_alive(&self) -> bool {
-        !matches!(
-            self.status,
-            SessionStatus::Stopped { .. } | SessionStatus::Error { .. }
-        )
     }
 
     /// Short status label for the sidebar.
@@ -129,6 +116,16 @@ impl Session {
 }
 
 #[cfg(test)]
+impl Session {
+    pub fn is_alive(&self) -> bool {
+        !matches!(
+            self.status,
+            SessionStatus::Stopped { .. } | SessionStatus::Error { .. }
+        )
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -139,8 +136,6 @@ mod tests {
             "test".into(),
             "fix tests".into(),
             PathBuf::from("/tmp"),
-            80,
-            24,
         );
         assert!(matches!(s.status, SessionStatus::Starting));
         assert!(s.is_alive());
@@ -153,8 +148,6 @@ mod tests {
             "test".into(),
             "fix tests".into(),
             PathBuf::from("/tmp"),
-            80,
-            24,
         );
         s.status = SessionStatus::Stopped { exit_code: Some(0) };
         assert!(!s.is_alive());
@@ -167,8 +160,6 @@ mod tests {
             "test".into(),
             "prompt".into(),
             PathBuf::from("/tmp"),
-            80,
-            24,
         );
         assert_eq!(s.status_label(), "starting");
 

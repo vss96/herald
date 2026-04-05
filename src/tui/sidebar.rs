@@ -10,7 +10,6 @@ use crate::session::model::{AttentionReason, Session, SessionStatus};
 const BLUE: Color = Color::Rgb(100, 149, 237); // Cornflower blue
 const RED: Color = Color::Rgb(255, 85, 85); // Bright red
 const GREEN: Color = Color::Rgb(80, 200, 120); // Emerald green
-const YELLOW: Color = Color::Rgb(255, 200, 50); // Warm yellow
 const DIM: Color = Color::Rgb(100, 100, 100); // Dim gray
 const CYAN: Color = Color::Cyan;
 
@@ -69,7 +68,7 @@ impl<'a> Widget for Sidebar<'a> {
             .map(|(i, session)| {
                 let is_active = self
                     .active_session_id
-                    .map_or(false, |id| id == session.id.as_str());
+                    .is_some_and(|id| id == session.id.as_str());
                 let is_selected = i == self.selected_index;
 
                 let (indicator, session_color) = session_style(&session.status);
@@ -183,7 +182,6 @@ fn session_style(status: &SessionStatus) -> (&'static str, Color) {
 mod tests {
     use super::*;
     use crate::tui::test_helpers::*;
-    use std::time::Instant;
 
     #[test]
     fn sidebar_empty() {

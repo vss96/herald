@@ -2,7 +2,7 @@
 source: src/app.rs
 expression: output
 ---
-┌ test ────────────────────────────────────────────────┐┌ Sessions (2) ────────┐
+┌ test — /tmp — 0s — "prompt" ─────────────────────────┐┌ Sessions (2) ────────┐
 │                                                      ││▸◐ test [running]     │
 │                                                      ││ ● test [needs input] │
 │                                                      ││                      │

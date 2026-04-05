@@ -11,7 +11,6 @@ pub struct QueueEntry {
     pub priority: Priority,
     pub reason: AttentionReason,
     pub entered_at: Instant,
-    pub tool_use_id: Option<String>,
 }
 
 /// Priority queue with fairness, debounce, and resolution-based clearing.
@@ -31,8 +30,6 @@ pub struct AttentionQueue {
     debounce_duration: Duration,
     /// Cooldown before a session can re-enter the same tier
     fairness_cooldown: Duration,
-    /// Entries older than this are considered stale
-    stale_threshold: Duration,
 }
 
 impl AttentionQueue {
@@ -42,19 +39,6 @@ impl AttentionQueue {
             last_entry_time: HashMap::new(),
             debounce_duration: Duration::from_secs(2),
             fairness_cooldown: Duration::from_secs(5),
-            stale_threshold: Duration::from_secs(300), // 5 minutes
-        }
-    }
-
-    /// For testing: create with custom durations.
-    #[cfg(test)]
-    fn with_config(debounce: Duration, cooldown: Duration, stale: Duration) -> Self {
-        Self {
-            entries: HashMap::new(),
-            last_entry_time: HashMap::new(),
-            debounce_duration: debounce,
-            fairness_cooldown: cooldown,
-            stale_threshold: stale,
         }
     }
 
@@ -140,7 +124,6 @@ impl AttentionQueue {
                 priority,
                 reason,
                 entered_at: now,
-                tool_use_id: event.tool_use_id.clone(),
             },
         );
         self.last_entry_time.insert(tier_key, now);
@@ -206,24 +189,23 @@ impl AttentionQueue {
         entries
     }
 
-    /// Check if a session has a stale entry.
-    pub fn is_stale(&self, session_id: &SessionId) -> bool {
-        self.is_stale_at(session_id, Instant::now())
+}
+
+#[cfg(test)]
+impl AttentionQueue {
+    fn with_config(debounce: Duration, cooldown: Duration) -> Self {
+        Self {
+            entries: HashMap::new(),
+            last_entry_time: HashMap::new(),
+            debounce_duration: debounce,
+            fairness_cooldown: cooldown,
+        }
     }
 
-    fn is_stale_at(&self, session_id: &SessionId, now: Instant) -> bool {
+    fn is_stale_at(&self, session_id: &SessionId, now: Instant, threshold: Duration) -> bool {
         self.entries
             .get(session_id)
-            .is_some_and(|e| now.duration_since(e.entered_at) > self.stale_threshold)
-    }
-
-    /// Force-dismiss a stale entry.
-    pub fn dismiss_stale(&mut self, session_id: &SessionId) -> bool {
-        if self.is_stale(session_id) {
-            self.entries.remove(session_id);
-            return true;
-        }
-        false
+            .is_some_and(|e| now.duration_since(e.entered_at) > threshold)
     }
 
     pub fn len(&self) -> usize {
@@ -238,7 +220,6 @@ impl AttentionQueue {
         self.entries.get(session_id)
     }
 
-    /// Remove any entry for a session, regardless of reason.
     pub fn remove(&mut self, session_id: &SessionId) -> bool {
         self.entries.remove(session_id).is_some()
     }
@@ -501,7 +482,6 @@ mod tests {
         let mut q = AttentionQueue::with_config(
             Duration::from_secs(2),
             Duration::ZERO, // disable cooldown for this test
-            Duration::from_secs(300),
         );
         let now = Instant::now();
 
@@ -518,7 +498,6 @@ mod tests {
         let mut q = AttentionQueue::with_config(
             Duration::from_secs(2),
             Duration::ZERO,
-            Duration::from_secs(300),
         );
         let now = Instant::now();
 
@@ -537,7 +516,6 @@ mod tests {
         let mut q = AttentionQueue::with_config(
             Duration::ZERO,
             Duration::from_secs(5),
-            Duration::from_secs(300),
         );
         let now = Instant::now();
 
@@ -559,7 +537,6 @@ mod tests {
         let mut q = AttentionQueue::with_config(
             Duration::ZERO,
             Duration::from_secs(5),
-            Duration::from_secs(300),
         );
         let now = Instant::now();
 
@@ -580,15 +557,15 @@ mod tests {
         let mut q = AttentionQueue::with_config(
             Duration::ZERO,
             Duration::ZERO,
-            Duration::from_secs(300),
         );
         let now = Instant::now();
 
         let e = make_event("s1", HookEventName::PermissionRequest, Some("t1"));
         q.process_event_at(&e, now);
 
-        assert!(!q.is_stale_at(&sid("s1"), now + Duration::from_secs(299)));
-        assert!(q.is_stale_at(&sid("s1"), now + Duration::from_secs(301)));
+        let stale_threshold = Duration::from_secs(300);
+        assert!(!q.is_stale_at(&sid("s1"), now + Duration::from_secs(299), stale_threshold));
+        assert!(q.is_stale_at(&sid("s1"), now + Duration::from_secs(301), stale_threshold));
     }
 
     // ── Multiple sessions ──

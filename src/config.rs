@@ -67,7 +67,7 @@ impl OneOrMany {
 
 // ── Runtime keybinding types ────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct KeyBindings {
     pub sidebar: SidebarKeys,
     pub main_area: MainAreaKeys,
@@ -102,16 +102,6 @@ pub struct DialogKeys {
 }
 
 // ── Defaults (match current hardcoded behavior) ─────────────────────
-
-impl Default for KeyBindings {
-    fn default() -> Self {
-        Self {
-            sidebar: SidebarKeys::default(),
-            main_area: MainAreaKeys::default(),
-            dialog: DialogKeys::default(),
-        }
-    }
-}
 
 impl Default for SidebarKeys {
     fn default() -> Self {
@@ -244,9 +234,7 @@ pub fn format_key(key: &KeyEvent) -> String {
     };
 
     parts.push(&key_name);
-    // Borrow checker: key_name lives long enough since we return owned String
-    let result = parts.join("-");
-    result
+    parts.join("-")
 }
 
 /// Check if a key event matches any of the configured bindings.

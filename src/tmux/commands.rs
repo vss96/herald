@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -94,23 +93,6 @@ pub async fn list_panes(session: &str, format: &str) -> Result<Vec<String>> {
         .filter(|l| !l.is_empty())
         .map(|l| l.to_string())
         .collect())
-}
-
-pub async fn kill_window(session: &str, window_name: &str) -> Result<()> {
-    let target = format!("{}:{}", session, window_name);
-    let output = run_tmux(args(&["kill-window", "-t", &target])).await?;
-    if !output.success {
-        anyhow::bail!("failed to kill window '{}': {}", target, output.stderr);
-    }
-    Ok(())
-}
-
-pub async fn kill_session(name: &str) -> Result<()> {
-    let output = run_tmux(args(&["kill-session", "-t", name])).await?;
-    if !output.success {
-        anyhow::bail!("failed to kill session '{}': {}", name, output.stderr);
-    }
-    Ok(())
 }
 
 /// Capture the visible content of a pane with ANSI color escape sequences.

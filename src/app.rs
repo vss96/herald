@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
@@ -13,6 +13,7 @@ use crate::events::types::HookEvent;
 use crate::input::batcher::KeyBatcher;
 use crate::input::tmux_keys::{self, TmuxKey};
 use crate::session::manager::SessionManager;
+use crate::session::model::SessionStatus;
 use crate::session::model::SessionId;
 use crate::tui::dialogs::NewSessionDialog;
 use crate::tui::layout;
@@ -57,14 +58,13 @@ pub struct App {
 impl App {
     pub fn new(
         runtime_dir: PathBuf,
-        terminal_cols: u16,
         terminal_rows: u16,
         keybindings: KeyBindings,
     ) -> Self {
         // Create a dummy channel — main() will replace event_tx
         let (_tx, rx) = mpsc::unbounded_channel();
         Self {
-            session_manager: SessionManager::new(runtime_dir.clone(), terminal_cols, terminal_rows),
+            session_manager: SessionManager::new(runtime_dir.clone(), terminal_rows),
             attention_queue: AttentionQueue::new(),
             active_session_id: None,
             focus: Focus::Sidebar,
@@ -173,8 +173,17 @@ impl App {
             }
         } else if config::key_matches(&key, &kb.dismiss) {
             if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
-                self.attention_queue.dismiss_completion(&id);
-                self.attention_queue.dismiss_error(&id);
+                if self.attention_queue.dismiss_completion(&id) {
+                    if let Some(session) = self.session_manager.get_mut(&id) {
+                        session.status = SessionStatus::Stopped { exit_code: None };
+                    }
+                } else if self.attention_queue.dismiss_error(&id) {
+                    if let Some(session) = self.session_manager.get_mut(&id) {
+                        session.status = SessionStatus::Error {
+                            message: "dismissed".to_string(),
+                        };
+                    }
+                }
             }
         } else if config::key_matches(&key, &kb.kill_session) {
             if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
@@ -483,7 +492,20 @@ impl App {
         let title = if let Some(ref id) = self.active_session_id {
             self.session_manager
                 .get(id)
-                .map(|s| s.nickname.clone())
+                .map(|s| {
+                    let age = format_elapsed(s.created_at.elapsed());
+                    let dir = short_path(&s.working_dir);
+                    if s.prompt.is_empty() {
+                        format!("{} — {} — {}", s.nickname, dir, age)
+                    } else {
+                        let prompt = if s.prompt.len() > 40 {
+                            format!("{}…", &s.prompt[..39])
+                        } else {
+                            s.prompt.clone()
+                        };
+                        format!("{} — {} — {} — \"{}\"", s.nickname, dir, age, prompt)
+                    }
+                })
                 .unwrap_or_else(|| "herald".to_string())
         } else {
             "herald".to_string()
@@ -519,15 +541,38 @@ impl App {
     }
 }
 
+fn format_elapsed(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
+}
+
+fn short_path(path: &std::path::Path) -> String {
+    let components: Vec<_> = path.components().collect();
+    if components.len() <= 2 {
+        path.display().to_string()
+    } else {
+        let last_two: std::path::PathBuf = components[components.len() - 2..]
+            .iter()
+            .collect();
+        format!("…/{}", last_two.display())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
     use crate::events::types::{HookEvent, HookEventName};
 
     fn make_app() -> App {
         App::new(
             PathBuf::from("/tmp/herald-test"),
-            80,
             24,
             crate::config::KeyBindings::default(),
         )
@@ -544,7 +589,6 @@ mod tests {
             "test".to_string(),
             "prompt".to_string(),
             PathBuf::from("/tmp"),
-            80, 24,
         );
         app.session_manager.insert_test_session(s);
     }
@@ -678,7 +722,7 @@ mod tests {
         kb.sidebar.quit = vec![KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE)];
         let mut app = App::new(
             PathBuf::from("/tmp/herald-test"),
-            80, 24, kb,
+            24, kb,
         );
         // Default 'q' should no longer quit
         app.handle_key(KeyEvent::from(KeyCode::Char('q'))).await;
@@ -696,7 +740,7 @@ mod tests {
         ];
         let mut app = App::new(
             PathBuf::from("/tmp/herald-test"),
-            80, 24, kb,
+            24, kb,
         );
         app.focus = Focus::MainArea;
         // Default Ctrl+G should NOT return to sidebar

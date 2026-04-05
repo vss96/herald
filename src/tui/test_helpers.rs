@@ -51,8 +51,6 @@ pub fn make_test_session(id: &str, nickname: &str, status: SessionStatus) -> Ses
         nickname.to_string(),
         "test prompt".to_string(),
         PathBuf::from("/tmp"),
-        80,
-        24,
     );
     s.status = status;
     s

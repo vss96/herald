@@ -26,10 +26,6 @@ impl HookListener {
         &self.socket_path
     }
 
-    pub fn buffer_path(&self) -> &Path {
-        &self.buffer_path
-    }
-
     /// Drain buffered events from the buffer file (for recovery after restart).
     ///
     /// Uses atomic rename-then-read to avoid racing with concurrent hook writes.

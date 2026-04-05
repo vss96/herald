@@ -15,16 +15,14 @@ const SESSION_FILE_EXTENSIONS: &[&str] = &["sock", "buffer", "prompt", "lock"];
 pub struct SessionManager {
     sessions: HashMap<SessionId, Session>,
     runtime_dir: PathBuf,
-    terminal_cols: u16,
     terminal_rows: u16,
 }
 
 impl SessionManager {
-    pub fn new(runtime_dir: PathBuf, terminal_cols: u16, terminal_rows: u16) -> Self {
+    pub fn new(runtime_dir: PathBuf, terminal_rows: u16) -> Self {
         Self {
             sessions: HashMap::new(),
             runtime_dir,
-            terminal_cols,
             terminal_rows,
         }
     }
@@ -88,8 +86,6 @@ impl SessionManager {
             nickname.to_string(),
             prompt.to_string(),
             working_dir.to_path_buf(),
-            self.terminal_cols,
-            self.terminal_rows,
         );
         session.tmux_pane_id = pane_id;
 
@@ -110,12 +106,6 @@ impl SessionManager {
         }
         self.sessions.remove(session_id);
         Ok(())
-    }
-
-    pub fn rename(&mut self, session_id: &SessionId, new_name: &str) {
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            session.nickname = new_name.to_string();
-        }
     }
 
     pub fn get(&self, session_id: &SessionId) -> Option<&Session> {
@@ -179,8 +169,6 @@ impl SessionManager {
                     nickname,
                     String::new(),
                     PathBuf::new(),
-                    self.terminal_cols,
-                    self.terminal_rows,
                 );
                 session.tmux_pane_id = pane_id;
                 self.sessions.insert(session_id.clone(), session);
@@ -195,11 +183,6 @@ impl SessionManager {
 /// Escape a string for safe use in shell single quotes.
 fn shell_escape(s: String) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// Capture the visible content of a session's tmux pane.
-pub async fn capture_session_pane(pane_id: &str) -> Result<String> {
-    commands::capture_pane(pane_id).await
 }
 
 /// Write Claude Code hook configuration for a session (blocking I/O).
@@ -249,11 +232,11 @@ fn write_hook_config(runtime_dir: &Path, working_dir: &Path, session_id: &str) -
                 arr.retain(|entry| {
                     !entry["hooks"]
                         .as_array()
-                        .map_or(false, |h| {
+                        .is_some_and(|h| {
                             h.iter().any(|hook| {
                                 hook["command"]
                                     .as_str()
-                                    .map_or(false, |cmd| cmd.contains("herald-hook.py"))
+                                    .is_some_and(|cmd| cmd.contains("herald-hook.py"))
                             })
                         })
                 });
