@@ -37,7 +37,10 @@ pub fn decode_octal_escapes(input: &str) -> Vec<u8> {
             let d1 = bytes[i + 1];
             let d2 = bytes[i + 2];
             let d3 = bytes[i + 3];
-            if d1.is_ascii_digit() && d2.is_ascii_digit() && d3.is_ascii_digit() {
+            if (b'0'..=b'7').contains(&d1)
+                && (b'0'..=b'7').contains(&d2)
+                && (b'0'..=b'7').contains(&d3)
+            {
                 let val = (d1 - b'0') as u16 * 64 + (d2 - b'0') as u16 * 8 + (d3 - b'0') as u16;
                 result.push(val as u8);
                 i += 4;
@@ -197,6 +200,12 @@ mod tests {
     #[test]
     fn decode_empty_string() {
         assert_eq!(decode_octal_escapes(""), b"");
+    }
+
+    #[test]
+    fn decode_rejects_non_octal_digits() {
+        // \890 contains digits 8 and 9 which are not valid octal — should pass through as literal
+        assert_eq!(decode_octal_escapes(r"\890"), br"\890");
     }
 
     // ── parse_control_line ──

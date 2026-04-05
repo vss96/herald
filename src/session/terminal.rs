@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use ratatui::style::{Color, Modifier, Style};
 
 /// A single cell in the terminal grid.
@@ -22,19 +24,20 @@ impl Default for Cell {
 pub struct TerminalBuffer {
     cols: u16,
     rows: u16,
-    grid: Vec<Vec<Cell>>,
+    grid: VecDeque<Vec<Cell>>,
     cursor_row: u16,
     cursor_col: u16,
     current_style: Style,
     parser: vte::Parser,
     /// Scrollback lines above the visible area
-    scrollback: Vec<Vec<Cell>>,
+    scrollback: VecDeque<Vec<Cell>>,
     max_scrollback: usize,
 }
 
 impl TerminalBuffer {
     pub fn new(cols: u16, rows: u16) -> Self {
-        let grid = vec![vec![Cell::default(); cols as usize]; rows as usize];
+        let grid: VecDeque<Vec<Cell>> =
+            (0..rows).map(|_| vec![Cell::default(); cols as usize]).collect();
         Self {
             cols,
             rows,
@@ -43,7 +46,7 @@ impl TerminalBuffer {
             cursor_col: 0,
             current_style: Style::default(),
             parser: vte::Parser::new(),
-            scrollback: Vec::new(),
+            scrollback: VecDeque::new(),
             max_scrollback: 10_000,
         }
     }
@@ -85,7 +88,7 @@ impl TerminalBuffer {
         self.cols
     }
 
-    pub fn grid(&self) -> &Vec<Vec<Cell>> {
+    pub fn grid(&self) -> &VecDeque<Vec<Cell>> {
         &self.grid
     }
 
@@ -106,10 +109,10 @@ impl TerminalBuffer {
         if cols == 0 || rows == 0 {
             return;
         }
-        let new_grid = vec![vec![Cell::default(); cols as usize]; rows as usize];
+        let mut grid: VecDeque<Vec<Cell>> =
+            (0..rows).map(|_| vec![Cell::default(); cols as usize]).collect();
         let copy_rows = self.rows.min(rows) as usize;
         let copy_cols = self.cols.min(cols) as usize;
-        let mut grid = new_grid;
         for r in 0..copy_rows {
             for c in 0..copy_cols {
                 grid[r][c] = self.grid[r][c].clone();
@@ -125,28 +128,29 @@ impl TerminalBuffer {
 
 /// Scroll the grid up by one line, pushing top line to scrollback.
 fn scroll_up(
-    grid: &mut Vec<Vec<Cell>>,
+    grid: &mut VecDeque<Vec<Cell>>,
     cols: u16,
-    scrollback: &mut Vec<Vec<Cell>>,
+    scrollback: &mut VecDeque<Vec<Cell>>,
     max_scrollback: usize,
 ) {
-    let top_row = grid.remove(0);
-    scrollback.push(top_row);
-    if scrollback.len() > max_scrollback {
-        scrollback.remove(0);
+    if let Some(top_row) = grid.pop_front() {
+        scrollback.push_back(top_row);
+        if scrollback.len() > max_scrollback {
+            scrollback.pop_front();
+        }
     }
-    grid.push(vec![Cell::default(); cols as usize]);
+    grid.push_back(vec![Cell::default(); cols as usize]);
 }
 
 /// VTE Perform implementation that writes to our grid.
 struct TermPerformer<'a> {
     cols: u16,
     rows: u16,
-    grid: &'a mut Vec<Vec<Cell>>,
+    grid: &'a mut VecDeque<Vec<Cell>>,
     cursor_row: &'a mut u16,
     cursor_col: &'a mut u16,
     current_style: &'a mut Style,
-    scrollback: &'a mut Vec<Vec<Cell>>,
+    scrollback: &'a mut VecDeque<Vec<Cell>>,
     max_scrollback: usize,
 }
 

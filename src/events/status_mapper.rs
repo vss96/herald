@@ -15,6 +15,7 @@ pub fn next_status(
         HookEventName::PermissionRequest => Some(SessionStatus::NeedsAttention {
             reason: AttentionReason::PermissionPrompt {
                 tool_name: tool_name.unwrap_or("").to_string(),
+                tool_use_id: None,
             },
             since: Instant::now(),
         }),
@@ -58,6 +59,7 @@ mod tests {
         SessionStatus::NeedsAttention {
             reason: AttentionReason::PermissionPrompt {
                 tool_name: "Edit".into(),
+                tool_use_id: None,
             },
             since: Instant::now(),
         }
@@ -104,7 +106,7 @@ mod tests {
     fn permission_request_captures_tool_name() {
         let result = next_status(&running(), &HookEventName::PermissionRequest, Some("Bash"));
         if let Some(SessionStatus::NeedsAttention {
-            reason: AttentionReason::PermissionPrompt { tool_name },
+            reason: AttentionReason::PermissionPrompt { tool_name, .. },
             ..
         }) = result
         {
@@ -118,7 +120,7 @@ mod tests {
     fn permission_request_no_tool_name_defaults_empty() {
         let result = next_status(&running(), &HookEventName::PermissionRequest, None);
         if let Some(SessionStatus::NeedsAttention {
-            reason: AttentionReason::PermissionPrompt { tool_name },
+            reason: AttentionReason::PermissionPrompt { tool_name, .. },
             ..
         }) = result
         {

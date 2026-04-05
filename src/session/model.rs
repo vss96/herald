@@ -16,8 +16,14 @@ pub enum SessionStatus {
 /// Why a session needs human attention.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttentionReason {
-    PermissionPrompt { tool_name: String },
-    ToolError { tool_name: String, error: String },
+    PermissionPrompt {
+        tool_name: String,
+        tool_use_id: Option<String>,
+    },
+    ToolError {
+        tool_name: String,
+        error: String,
+    },
     Completed,
 }
 
@@ -129,6 +135,7 @@ mod tests {
         s.status = SessionStatus::NeedsAttention {
             reason: AttentionReason::PermissionPrompt {
                 tool_name: "Edit".into(),
+                tool_use_id: None,
             },
             since: Instant::now(),
         };

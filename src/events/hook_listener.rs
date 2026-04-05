@@ -79,7 +79,9 @@ impl HookListener {
                         let mut lines = reader.lines();
                         while let Ok(Some(line)) = lines.next_line().await {
                             if let Ok(event) = serde_json::from_str::<HookEvent>(&line) {
-                                let _ = tx.send(event).await;
+                                if let Err(e) = tx.send(event).await {
+                                    tracing::warn!("hook event channel send failed (receiver dropped): {}", e);
+                                }
                             }
                         }
                     });

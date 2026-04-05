@@ -2,19 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::events::types::{HookEvent, HookEventName, Priority};
-
-/// Reason a session needs attention.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AttentionReason {
-    PermissionPrompt {
-        tool_name: String,
-        tool_use_id: Option<String>,
-    },
-    ToolError {
-        tool_name: String,
-    },
-    Completed,
-}
+use crate::session::model::AttentionReason;
 
 /// An entry in the attention queue.
 #[derive(Debug, Clone)]
@@ -130,6 +118,7 @@ impl AttentionQueue {
             },
             HookEventName::PostToolUseFailure => AttentionReason::ToolError {
                 tool_name: event.tool_name.clone().unwrap_or_default(),
+                error: String::new(),
             },
             HookEventName::Stop => AttentionReason::Completed,
             _ => return false,
