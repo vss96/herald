@@ -1,5 +1,23 @@
 # Herald
 
+```
+        /\  ||  /\
+       /  \ || /  \
+      / /\ \||/ /\ \
+     |  \/  \/  \/  |
+      \   .-""-. ,/
+       \ / (00) \ /
+        |  \__/  |
+       /|""||||""|\
+      / |  ||||  | \
+     /  | /    \ |  \
+    /  /| |    | |\  \
+   /__/ | |    | | \__\
+        |_|    |_|
+    ═══════════════════
+        H E R A L D
+```
+
 A TUI session orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
 Herald lets you run multiple Claude Code sessions from a single terminal. It monitors all sessions in real-time and automatically surfaces the one that needs your attention — a permission prompt, an error, or a completed task. You work on one thing while Herald watches the rest.
