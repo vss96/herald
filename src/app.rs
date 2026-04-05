@@ -374,6 +374,11 @@ impl App {
 
     /// Refresh the active session's terminal buffer from tmux capture-pane.
     pub async fn refresh_active_terminal(&mut self) {
+        // Don't refresh while dialog is open (avoid visual noise)
+        if self.focus == Focus::Dialog {
+            return;
+        }
+
         let Some(ref session_id) = self.active_session_id else {
             return;
         };
@@ -384,14 +389,16 @@ impl App {
 
         match crate::tmux::commands::capture_pane(&pane_id).await {
             Ok(content) => {
-                if let Some(session) = self.session_manager.get_mut(session_id) {
-                    // Clear and re-render the terminal buffer from captured content
-                    session.terminal.process(b"\x1b[2J\x1b[H"); // clear + home
-                    session.terminal.process(content.as_bytes());
+                if !content.is_empty() {
+                    if let Some(session) = self.session_manager.get_mut(session_id) {
+                        // Clear and re-render the terminal buffer from captured content
+                        session.terminal.process(b"\x1b[2J\x1b[H"); // clear + home
+                        session.terminal.process(content.as_bytes());
+                    }
                 }
             }
             Err(e) => {
-                tracing::debug!(pane_id = %pane_id, "capture-pane failed: {}", e);
+                tracing::warn!(pane_id = %pane_id, "capture-pane failed: {}", e);
             }
         }
     }
