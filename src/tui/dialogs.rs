@@ -231,18 +231,38 @@ impl Widget for &NewSessionDialog {
                 };
                 let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
 
+                // Available character slots for text (after the leading space)
+                let field_width = (inner.x + inner.width).saturating_sub(input_x + 1) as usize;
+
                 if *active {
                     let (before, at, after) = input.parts();
-                    buf.set_string(input_x, input_y, format!(" {}", before), val_style);
-                    let cursor_x = input_x + 1 + before.len() as u16;
+                    let before_chars: Vec<char> = before.chars().collect();
+                    let cursor_pos = before_chars.len();
+
+                    // Scroll so the cursor stays visible
+                    let scroll = if cursor_pos >= field_width {
+                        cursor_pos - field_width + 1
+                    } else {
+                        0
+                    };
+
+                    let visible_before: String = before_chars[scroll..cursor_pos].iter().collect();
+                    let visible_before_width = visible_before.chars().count();
+
+                    buf.set_string(input_x, input_y, format!(" {}", &visible_before), val_style);
+                    let cursor_x = input_x + 1 + visible_before_width as u16;
                     let cursor_ch = at.unwrap_or(' ');
                     buf.set_string(cursor_x, input_y, cursor_ch.to_string(), cursor_style);
-                    if let Some(c) = at {
-                        let after_x = cursor_x + c.len_utf8() as u16;
-                        buf.set_string(after_x, input_y, after, val_style);
+
+                    if let Some(_c) = at {
+                        let after_x = cursor_x + 1;
+                        let remaining = field_width.saturating_sub(visible_before_width + 1);
+                        let visible_after: String = after.chars().take(remaining).collect();
+                        buf.set_string(after_x, input_y, &visible_after, val_style);
                     }
                 } else {
-                    buf.set_string(input_x, input_y, format!(" {}", &input.text), val_style);
+                    let visible: String = input.text.chars().take(field_width).collect();
+                    buf.set_string(input_x, input_y, format!(" {}", &visible), val_style);
                 }
             }
         }
@@ -424,6 +444,27 @@ mod tests {
         dialog.nickname.set("my-session".into());
         dialog.working_dir.set("/home/user/project".into());
         dialog.prompt.set("fix the tests".into());
+        dialog.active_field = DialogField::Prompt;
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        Widget::render(&dialog, area, &mut buf);
+        let output = buffer_to_string(&buf);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn dialog_long_prompt_does_not_overflow() {
+        use crate::tui::test_helpers::buffer_to_string;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut dialog = NewSessionDialog::default();
+        dialog.visible = true;
+        dialog.nickname.set("sess".into());
+        dialog.prompt.set(
+            "if the text is more than a certain set of characters it overflows all the way to the right"
+                .into(),
+        );
         dialog.active_field = DialogField::Prompt;
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
