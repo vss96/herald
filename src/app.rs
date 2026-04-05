@@ -13,7 +13,6 @@ use crate::events::queue::AttentionQueue;
 use crate::input::tmux_keys::{self, TmuxKey};
 use crate::events::types::HookEvent;
 use crate::session::manager::SessionManager;
-use crate::session::model::SessionStatus;
 use crate::tui::dialogs::NewSessionDialog;
 use crate::tui::layout;
 use crate::tui::main_area::MainArea;
@@ -90,46 +89,12 @@ impl App {
 
         // Update session status based on event
         if let Some(session) = self.session_manager.get_mut(&session_id) {
-            match event.hook_event_name {
-                crate::events::types::HookEventName::PermissionRequest => {
-                    session.status = SessionStatus::NeedsAttention {
-                        reason: crate::session::model::AttentionReason::PermissionPrompt {
-                            tool_name: event.tool_name.clone().unwrap_or_default(),
-                        },
-                        since: Instant::now(),
-                    };
-                }
-                crate::events::types::HookEventName::PostToolUseFailure => {
-                    session.status = SessionStatus::NeedsAttention {
-                        reason: crate::session::model::AttentionReason::ToolError {
-                            tool_name: event.tool_name.clone().unwrap_or_default(),
-                            error: String::new(),
-                        },
-                        since: Instant::now(),
-                    };
-                }
-                crate::events::types::HookEventName::Stop => {
-                    session.status = SessionStatus::NeedsAttention {
-                        reason: crate::session::model::AttentionReason::Completed,
-                        since: Instant::now(),
-                    };
-                }
-                crate::events::types::HookEventName::PostToolUse
-                | crate::events::types::HookEventName::PreToolUse
-                | crate::events::types::HookEventName::Notification => {
-                    // Transition any non-terminal status to Running
-                    match session.status {
-                        SessionStatus::Starting
-                        | SessionStatus::Running { .. }
-                        | SessionStatus::NeedsAttention { .. } => {
-                            session.status = SessionStatus::Running {
-                                last_activity: Instant::now(),
-                            };
-                        }
-                        _ => {} // Don't resurrect Stopped/Error sessions
-                    }
-                }
-                _ => {}
+            if let Some(new_status) = crate::events::status_mapper::next_status(
+                &session.status,
+                &event.hook_event_name,
+                event.tool_name.as_deref(),
+            ) {
+                session.status = new_status;
             }
         }
 
