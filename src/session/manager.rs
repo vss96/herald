@@ -142,17 +142,25 @@ impl SessionManager {
             return Ok(vec![]);
         }
 
-        // Use tab delimiter — safe even if nickname contains spaces
-        let format = "#{pane_id}\t#{window_name}\t#{@herald_session_id}";
+        // Use tab delimiter — safe even if nickname contains spaces.
+        // Include pane_current_command to filter out herald's own panes.
+        let format = "#{pane_id}\t#{window_name}\t#{@herald_session_id}\t#{pane_current_command}";
         let panes = commands::list_panes(TMUX_SESSION_NAME, format).await?;
 
         let mut discovered = Vec::new();
         for line in panes {
-            let parts: Vec<&str> = line.splitn(3, '\t').collect();
-            if parts.len() >= 3 && !parts[2].is_empty() {
+            let parts: Vec<&str> = line.splitn(4, '\t').collect();
+            if parts.len() >= 4 && !parts[2].is_empty() {
                 let pane_id = parts[0].to_string();
                 let nickname = parts[1].to_string();
                 let session_id = parts[2].to_string();
+                let command = parts[3];
+
+                // Skip panes running herald itself (the default shell from new-session)
+                if command == "herald" {
+                    tracing::info!(pane_id = %pane_id, "skipping herald's own pane");
+                    continue;
+                }
 
                 let mut session = Session::new(
                     session_id.clone(),
