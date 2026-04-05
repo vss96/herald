@@ -4,15 +4,21 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Widget};
 
-use crate::session::model::{Session, SessionStatus, AttentionReason};
+use crate::session::model::{AttentionReason, Session, SessionStatus};
+
+// Color palette
+const BLUE: Color = Color::Rgb(100, 149, 237); // Cornflower blue
+const RED: Color = Color::Rgb(255, 85, 85); // Bright red
+const GREEN: Color = Color::Rgb(80, 200, 120); // Emerald green
+const YELLOW: Color = Color::Rgb(255, 200, 50); // Warm yellow
+const DIM: Color = Color::Rgb(100, 100, 100); // Dim gray
+const CYAN: Color = Color::Cyan;
 
 /// Sidebar widget showing all sessions with status.
 pub struct Sidebar<'a> {
     sessions: &'a [&'a Session],
     active_session_id: Option<&'a str>,
-    /// Index of the currently highlighted session in the sidebar
     selected_index: usize,
-    /// Whether the sidebar has keyboard focus
     has_focus: bool,
 }
 
@@ -35,11 +41,22 @@ impl<'a> Sidebar<'a> {
 impl<'a> Widget for Sidebar<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let title = format!(" Sessions ({}) ", self.sessions.len());
-        let border_color = if self.has_focus {
-            Color::Cyan
+
+        // Count sessions needing attention for border color
+        let attention_count = self
+            .sessions
+            .iter()
+            .filter(|s| matches!(s.status, SessionStatus::NeedsAttention { .. }))
+            .count();
+
+        let border_color = if attention_count > 0 {
+            RED
+        } else if self.has_focus {
+            CYAN
         } else {
-            Color::DarkGray
+            DIM
         };
+
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
@@ -55,45 +72,85 @@ impl<'a> Widget for Sidebar<'a> {
                     .map_or(false, |id| id == session.id);
                 let is_selected = i == self.selected_index;
 
-                let (indicator, indicator_color) = status_indicator(&session.status);
+                let (indicator, session_color) = session_style(&session.status);
 
-                let name_style = if is_selected && self.has_focus {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else if is_active {
-                    Style::default().add_modifier(Modifier::BOLD)
+                // Background for selected item
+                let bg = if is_selected && self.has_focus {
+                    Some(Color::Rgb(45, 45, 65))
                 } else {
-                    Style::default()
+                    None
+                };
+
+                let name_style = {
+                    let mut s = Style::default().fg(session_color);
+                    if is_active {
+                        s = s.add_modifier(Modifier::BOLD);
+                    }
+                    if let Some(bg) = bg {
+                        s = s.bg(bg);
+                    }
+                    s
+                };
+
+                let indicator_style = {
+                    let mut s = Style::default().fg(session_color);
+                    if let Some(bg) = bg {
+                        s = s.bg(bg);
+                    }
+                    s
                 };
 
                 let label = session.status_label();
-                let label_style = if is_selected && self.has_focus {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    status_label_style(&session.status)
+                let label_color = match &session.status {
+                    SessionStatus::NeedsAttention { reason, .. } => match reason {
+                        AttentionReason::ToolError { .. }
+                        | AttentionReason::PermissionPrompt { .. } => RED,
+                        AttentionReason::Completed => GREEN,
+                    },
+                    SessionStatus::Running { .. } => BLUE,
+                    SessionStatus::Error { .. } => RED,
+                    _ => DIM,
+                };
+                let label_style = {
+                    let mut s = Style::default().fg(label_color);
+                    if matches!(
+                        session.status,
+                        SessionStatus::NeedsAttention {
+                            reason: AttentionReason::PermissionPrompt { .. }
+                                | AttentionReason::ToolError { .. },
+                            ..
+                        }
+                    ) {
+                        s = s.add_modifier(Modifier::BOLD);
+                    }
+                    if let Some(bg) = bg {
+                        s = s.bg(bg);
+                    }
+                    s
                 };
 
-                let indicator_style = if is_selected && self.has_focus {
-                    Style::default().fg(indicator_color).bg(Color::Cyan)
-                } else {
-                    Style::default().fg(indicator_color)
+                let active_marker = if is_active { "▸" } else { " " };
+                let marker_style = {
+                    let mut s = Style::default().fg(CYAN);
+                    if let Some(bg) = bg {
+                        s = s.bg(bg);
+                    }
+                    s
                 };
 
-                // Show a marker for the active (viewed) session
-                let active_marker = if is_active { ">" } else { " " };
-                let marker_style = if is_selected && self.has_focus {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    Style::default().fg(Color::Cyan)
+                let pad_style = {
+                    let mut s = Style::default();
+                    if let Some(bg) = bg {
+                        s = s.bg(bg);
+                    }
+                    s
                 };
 
                 let line = Line::from(vec![
                     Span::styled(active_marker, marker_style),
                     Span::styled(format!("{} ", indicator), indicator_style),
                     Span::styled(&session.nickname, name_style),
-                    Span::styled(" ", name_style),
+                    Span::styled(" ", pad_style),
                     Span::styled(format!("[{}]", label), label_style),
                 ]);
 
@@ -106,31 +163,16 @@ impl<'a> Widget for Sidebar<'a> {
     }
 }
 
-fn status_indicator(status: &SessionStatus) -> (&'static str, Color) {
+fn session_style(status: &SessionStatus) -> (&'static str, Color) {
     match status {
-        SessionStatus::Starting => ("○", Color::DarkGray),
-        SessionStatus::Running { .. } => ("◐", Color::Yellow),
+        SessionStatus::Starting => ("○", DIM),
+        SessionStatus::Running { .. } => ("◐", BLUE),
         SessionStatus::NeedsAttention { reason, .. } => match reason {
-            AttentionReason::ToolError { .. } => ("●", Color::Red),
-            AttentionReason::PermissionPrompt { .. } => ("●", Color::Red),
-            AttentionReason::Completed => ("✓", Color::Green),
+            AttentionReason::ToolError { .. } => ("●", RED),
+            AttentionReason::PermissionPrompt { .. } => ("●", RED),
+            AttentionReason::Completed => ("✓", GREEN),
         },
-        SessionStatus::Stopped { .. } => ("✓", Color::Green),
-        SessionStatus::Error { .. } => ("✗", Color::Red),
-    }
-}
-
-fn status_label_style(status: &SessionStatus) -> Style {
-    match status {
-        SessionStatus::NeedsAttention { reason, .. } => match reason {
-            AttentionReason::ToolError { .. } => Style::default().fg(Color::Red),
-            AttentionReason::PermissionPrompt { .. } => {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-            }
-            AttentionReason::Completed => Style::default().fg(Color::Green),
-        },
-        SessionStatus::Running { .. } => Style::default().fg(Color::Yellow),
-        SessionStatus::Error { .. } => Style::default().fg(Color::Red),
-        _ => Style::default().fg(Color::DarkGray),
+        SessionStatus::Stopped { .. } => ("✓", GREEN),
+        SessionStatus::Error { .. } => ("✗", RED),
     }
 }

@@ -127,11 +127,8 @@ impl App {
         }
 
         // Auto-switch to highest priority session if user is idle
-        if changed && self.is_idle() && self.focus != Focus::Dialog {
-            if let Some(entry) = self.attention_queue.peek() {
-                self.active_session_id = Some(entry.session_id.clone());
-                self.focus = Focus::MainArea;
-            }
+        if changed {
+            self.try_auto_switch();
         }
     }
 
@@ -432,6 +429,8 @@ impl App {
                 _ => {}
             }
         }
+        // Check if any drained events should trigger auto-switch
+        self.try_auto_switch();
     }
 
     /// Refresh the active session's pane content from tmux capture-pane.
@@ -458,6 +457,27 @@ impl App {
             }
             Err(e) => {
                 tracing::warn!(pane_id = %pane_id, "capture-pane failed: {}", e);
+            }
+        }
+    }
+
+    /// Auto-switch to the highest priority session needing attention.
+    fn try_auto_switch(&mut self) {
+        if self.focus == Focus::Dialog {
+            return;
+        }
+        if let Some(entry) = self.attention_queue.peek() {
+            let needs_switch = self.active_session_id.as_deref() != Some(&entry.session_id);
+            if needs_switch {
+                self.active_session_id = Some(entry.session_id.clone());
+                // Also update sidebar index to match
+                if let Some(idx) = self.session_ids().iter().position(|id| id == &entry.session_id) {
+                    self.sidebar_index = idx;
+                }
+                // Only auto-focus main area if user is idle
+                if self.is_idle() {
+                    self.focus = Focus::MainArea;
+                }
             }
         }
     }
@@ -750,16 +770,18 @@ mod tests {
     }
 
     #[test]
-    fn no_auto_switch_when_typing() {
+    fn no_auto_focus_when_typing() {
         let mut app = make_app();
         // User just typed
         app.last_keypress = Instant::now();
+        app.focus = Focus::Sidebar;
 
         let event = make_hook("s1", HookEventName::PermissionRequest);
         app.handle_hook_event(event);
 
-        // Should NOT auto-switch
-        assert!(app.active_session_id.is_none());
+        // Should set active_session_id but NOT switch focus to main area
+        assert_eq!(app.active_session_id, Some("s1".to_string()));
+        assert_eq!(app.focus, Focus::Sidebar); // stays on sidebar
     }
 
     #[test]
