@@ -60,9 +60,9 @@ impl Widget for MainArea {
             let total_height = logo_height + 2; // logo + gap + help msg
             if inner.height >= total_height && inner.width as usize >= logo_width {
                 let start_y = inner.y + (inner.height.saturating_sub(total_height)) / 2;
+                let block_x = inner.x + inner.width.saturating_sub(logo_width as u16) / 2;
                 for (i, line) in logo_lines.iter().enumerate() {
-                    let x = inner.x + inner.width.saturating_sub(line.len() as u16) / 2;
-                    buf.set_string(x, start_y + i as u16, line, Style::default().fg(Color::Cyan));
+                    buf.set_string(block_x, start_y + i as u16, line, Style::default().fg(Color::Cyan));
                 }
                 let msg_y = start_y + logo_height + 1;
                 let msg_x = inner.x + inner.width.saturating_sub(msg.len() as u16) / 2;
