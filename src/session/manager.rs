@@ -198,11 +198,11 @@ fn write_hook_config(runtime_dir: &Path, working_dir: &Path, session_id: &str) -
     let claude_dir = working_dir.join(".claude");
     std::fs::create_dir_all(&claude_dir).context("creating .claude directory")?;
 
-    let hook_script = runtime_dir.join("herald-hook.sh");
+    let hook_script = runtime_dir.join("herald-hook.py");
     let socket_path = runtime_dir.join(format!("{}.sock", session_id));
 
     let herald_cmd = format!(
-        "CLAUDE_SESSION_ID={} HERALD_SOCKET={} bash {}",
+        "CLAUDE_SESSION_ID={} HERALD_SOCKET={} python3 {}",
         session_id,
         socket_path.display(),
         hook_script.display()
@@ -248,7 +248,7 @@ fn write_hook_config(runtime_dir: &Path, working_dir: &Path, session_id: &str) -
                             h.iter().any(|hook| {
                                 hook["command"]
                                     .as_str()
-                                    .map_or(false, |cmd| cmd.contains("herald-hook.sh"))
+                                    .map_or(false, |cmd| cmd.contains("herald-hook.py"))
                             })
                         })
                 });
@@ -344,7 +344,7 @@ mod tests {
         assert!(notif_hooks[1]["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .contains("herald-hook.sh"));
+            .contains("herald-hook.py"));
     }
 
     #[test]

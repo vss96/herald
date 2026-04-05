@@ -73,7 +73,36 @@ else
     echo "$REDACTED" >> "$BUFFER" 2>/dev/null || true
 fi
 
-# Attempt full event delivery via socket
-if [ -n "$SOCKET" ] && [ -S "$SOCKET" ]; then
-    echo "$EVENT" | socat - UNIX-CONNECT:"$SOCKET" 2>/dev/null || true
-fi
+# Attempt full event delivery via socket.
+# Try socat first, then python3 (always available on macOS), then nc.
+deliver_to_socket() {
+    if [ -z "$SOCKET" ] || [ ! -S "$SOCKET" ]; then
+        return 1
+    fi
+
+    if command -v socat &>/dev/null; then
+        echo "$EVENT" | socat - UNIX-CONNECT:"$SOCKET" 2>/dev/null && return 0
+    fi
+
+    if command -v python3 &>/dev/null; then
+        python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect('$SOCKET')
+    s.sendall(sys.stdin.buffer.read())
+    s.sendall(b'\n')
+    s.close()
+except:
+    sys.exit(1)
+" <<< "$EVENT" 2>/dev/null && return 0
+    fi
+
+    if command -v nc &>/dev/null; then
+        echo "$EVENT" | nc -U "$SOCKET" 2>/dev/null && return 0
+    fi
+
+    return 1
+}
+
+deliver_to_socket || true

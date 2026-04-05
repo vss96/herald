@@ -83,8 +83,8 @@ fn ensure_runtime_dir(dir: &PathBuf) -> Result<()> {
 
 /// Install the hook script to the runtime directory.
 fn install_hook_script(runtime_dir: &PathBuf) -> Result<PathBuf> {
-    let hook_path = runtime_dir.join("herald-hook.sh");
-    let script = include_str!("../scripts/herald-hook.sh");
+    let hook_path = runtime_dir.join("herald-hook.py");
+    let script = include_str!("../scripts/herald-hook.py");
     std::fs::write(&hook_path, script).context("writing hook script")?;
     #[cfg(unix)]
     {
@@ -255,6 +255,8 @@ async fn run_loop(
     app: &mut App,
 ) -> Result<()> {
     let mut tick_interval = tokio::time::interval(std::time::Duration::from_millis(150));
+    // Periodically drain buffer files as a fallback (every 2 seconds)
+    let mut drain_interval = tokio::time::interval(std::time::Duration::from_secs(2));
 
     loop {
         // Render every tick
@@ -280,6 +282,10 @@ async fn run_loop(
             // Tick: refresh active terminal from tmux capture-pane
             _ = tick_interval.tick() => {
                 app.refresh_active_terminal().await;
+            }
+            // Periodic buffer drain: catches events missed by socket delivery
+            _ = drain_interval.tick() => {
+                app.drain_all_buffers().await;
             }
         }
 

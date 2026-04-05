@@ -375,6 +375,31 @@ impl App {
         }
     }
 
+    /// Drain buffer files for all sessions — fallback for when socket delivery fails.
+    pub async fn drain_all_buffers(&mut self) {
+        let session_ids: Vec<String> = self
+            .session_manager
+            .sessions()
+            .map(|s| s.id.clone())
+            .collect();
+
+        for sid in session_ids {
+            let listener = crate::events::hook_listener::HookListener::new(
+                self.session_manager.runtime_dir(),
+                &sid,
+            );
+            match listener.drain_buffer().await {
+                Ok(events) if !events.is_empty() => {
+                    tracing::info!(session_id = %sid, count = events.len(), "drained buffer events");
+                    for event in events {
+                        self.handle_hook_event(event);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Refresh the active session's pane content from tmux capture-pane.
     pub async fn refresh_active_terminal(&mut self) {
         if self.focus == Focus::Dialog {
