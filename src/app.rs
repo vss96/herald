@@ -72,13 +72,19 @@ impl App {
 
     /// Process a hook event from a Claude Code session.
     pub fn handle_hook_event(&mut self, event: HookEvent) {
+        let session_id = event.session_id.clone();
+
+        // Ignore events from sessions we don't manage (stale buffer events)
+        if self.session_manager.get(&session_id).is_none() {
+            return;
+        }
+
         tracing::info!(
-            session_id = %event.session_id,
+            session_id = %session_id,
             event = ?event.hook_event_name,
             tool = ?event.tool_name,
             "hook event received"
         );
-        let session_id = event.session_id.clone();
         let changed = self.attention_queue.process_event(&event);
 
         // Update session status based on event
@@ -133,19 +139,24 @@ impl App {
     }
 
     /// Handle a keyboard event.
+    ///
+    /// When main area is focused, ALL keys go to the tmux pane (except Esc).
+    /// When sidebar is focused, keys control herald (n/x/q/j/k/Enter/etc).
+    /// Ctrl-C only quits herald from the sidebar — in the main area it goes to Claude.
     pub async fn handle_key(&mut self, key: KeyEvent) {
         self.last_keypress = Instant::now();
 
-        // Quit on Ctrl-C
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.should_quit = true;
-            return;
-        }
-
         match self.focus {
-            Focus::Dialog => self.handle_dialog_key(key).await,
-            Focus::Sidebar => self.handle_sidebar_key(key),
             Focus::MainArea => self.handle_main_area_key(key),
+            Focus::Dialog => self.handle_dialog_key(key).await,
+            Focus::Sidebar => {
+                // Ctrl-C quits herald only from sidebar
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                    self.should_quit = true;
+                    return;
+                }
+                self.handle_sidebar_key(key);
+            }
         }
     }
 
@@ -244,14 +255,31 @@ impl App {
                         });
                     }
                     KeyCode::Tab => {
+                        // Shift+Tab → send BTab (BackTab) to tmux
+                        let tmux_key = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            "BTab"
+                        } else {
+                            "Tab"
+                        };
+                        let tmux_key = tmux_key.to_string();
                         tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, "Tab").await;
+                            let _ = crate::tmux::commands::send_special_key(&pane_id, &tmux_key).await;
+                        });
+                    }
+                    KeyCode::BackTab => {
+                        // BackTab is Shift+Tab on some terminals
+                        tokio::spawn(async move {
+                            let _ = crate::tmux::commands::send_special_key(&pane_id, "BTab").await;
                         });
                     }
                     KeyCode::Char(c) => {
-                        let ch = if key.modifiers.contains(KeyModifiers::CONTROL) {
-                            // Ctrl-a → send C-a to tmux
+                        let ch = if key.modifiers.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) {
+                            format!("C-S-{}", c)
+                        } else if key.modifiers.contains(KeyModifiers::CONTROL) {
                             format!("C-{}", c)
+                        } else if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            // Shift+char — just send the char (uppercase handled by terminal)
+                            c.to_string()
                         } else {
                             c.to_string()
                         };
@@ -622,7 +650,13 @@ impl App {
             Focus::MainArea => "TERMINAL",
             Focus::Dialog => "NEW SESSION",
         };
-        let queue_count = self.attention_queue.len();
+        // Only count attention entries for sessions that actually exist
+        let queue_count = self
+            .attention_queue
+            .entries_sorted()
+            .iter()
+            .filter(|e| self.session_manager.get(&e.session_id).is_some())
+            .count();
         let bg = Color::Rgb(30, 30, 46); // dark purple-gray
         let status_line = Line::from(vec![
             Span::styled(" herald ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
@@ -680,6 +714,18 @@ mod tests {
 
     fn make_app() -> App {
         App::new(PathBuf::from("/tmp/herald-test"), 80, 24)
+    }
+
+    fn add_fake_session(app: &mut App, session_id: &str) {
+        use crate::session::model::Session;
+        let s = Session::new(
+            session_id.to_string(),
+            "test".to_string(),
+            "prompt".to_string(),
+            PathBuf::from("/tmp"),
+            80, 24,
+        );
+        app.session_manager.insert_test_session(s);
     }
 
     fn make_hook(session_id: &str, name: HookEventName) -> HookEvent {
@@ -744,9 +790,9 @@ mod tests {
     #[test]
     fn hook_event_queues_permission() {
         let mut app = make_app();
+        add_fake_session(&mut app, "s1");
         let event = make_hook("s1", HookEventName::PermissionRequest);
 
-        // Simulate an idle user (set last_keypress far in the past)
         app.last_keypress = Instant::now() - Duration::from_secs(10);
 
         app.handle_hook_event(event);
@@ -756,15 +802,12 @@ mod tests {
     #[test]
     fn auto_switch_when_idle() {
         let mut app = make_app();
-        // Make user idle
+        add_fake_session(&mut app, "s1");
         app.last_keypress = Instant::now() - Duration::from_secs(10);
 
         let event = make_hook("s1", HookEventName::PermissionRequest);
         app.handle_hook_event(event);
 
-        // Should auto-switch since user is idle
-        // (Note: session "s1" won't be in manager, so active_session_id gets set
-        //  but session lookup will return None — that's expected for this unit test)
         assert_eq!(app.active_session_id, Some("s1".to_string()));
         assert_eq!(app.focus, Focus::MainArea);
     }
@@ -772,7 +815,7 @@ mod tests {
     #[test]
     fn no_auto_focus_when_typing() {
         let mut app = make_app();
-        // User just typed
+        add_fake_session(&mut app, "s1");
         app.last_keypress = Instant::now();
         app.focus = Focus::Sidebar;
 
@@ -781,7 +824,7 @@ mod tests {
 
         // Should set active_session_id but NOT switch focus to main area
         assert_eq!(app.active_session_id, Some("s1".to_string()));
-        assert_eq!(app.focus, Focus::Sidebar); // stays on sidebar
+        assert_eq!(app.focus, Focus::Sidebar);
     }
 
     #[test]

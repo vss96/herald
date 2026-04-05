@@ -136,6 +136,12 @@ impl SessionManager {
         &self.runtime_dir
     }
 
+    /// Insert a session directly (for testing only).
+    #[cfg(test)]
+    pub fn insert_test_session(&mut self, session: Session) {
+        self.sessions.insert(session.id.clone(), session);
+    }
+
     /// Discover existing sessions from a previous TUI instance.
     pub async fn discover_existing(&mut self) -> Result<Vec<String>> {
         if !commands::has_session(TMUX_SESSION_NAME).await? {
