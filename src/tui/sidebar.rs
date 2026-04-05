@@ -74,9 +74,11 @@ impl<'a> Widget for Sidebar<'a> {
 
                 let (indicator, session_color) = session_style(&session.status);
 
-                // Background for selected item
+                // Background for selected item — bright enough to be clearly visible
                 let bg = if is_selected && self.has_focus {
-                    Some(Color::Rgb(45, 45, 65))
+                    Some(Color::Rgb(60, 60, 90))
+                } else if is_selected {
+                    Some(Color::Rgb(50, 50, 70))
                 } else {
                     None
                 };

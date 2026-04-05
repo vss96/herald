@@ -27,11 +27,13 @@ def main():
     if not event_raw:
         return
 
-    # Redact: keep only routing fields, never persist tool_input
+    # Redact: keep only routing fields, never persist tool_input.
+    # IMPORTANT: Replace session_id with herald's UUID (CLAUDE_SESSION_ID),
+    # because Claude Code's own session_id is different from herald's.
     try:
         event = json.loads(event_raw)
         redacted = json.dumps({
-            "session_id": event.get("session_id"),
+            "session_id": session_id,  # herald's UUID, not Claude's
             "hook_event_name": event.get("hook_event_name"),
             "tool_name": event.get("tool_name"),
             "tool_use_id": event.get("tool_use_id"),
@@ -63,15 +65,20 @@ def main():
     except OSError:
         pass
 
-    # Deliver full event to Unix socket
+    # Deliver event to Unix socket with herald's session_id
     if socket_path and os.path.exists(socket_path):
         try:
+            # Replace session_id in the full event for socket delivery too
+            event_for_socket = json.loads(event_raw)
+            event_for_socket["session_id"] = session_id
+            payload = json.dumps(event_for_socket)
+
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(2)
             s.connect(socket_path)
-            s.sendall((event_raw + "\n").encode())
+            s.sendall((payload + "\n").encode())
             s.close()
-        except (OSError, socket.error):
+        except (OSError, socket.error, json.JSONDecodeError):
             pass  # Event is in the buffer file as fallback
 
 if __name__ == "__main__":

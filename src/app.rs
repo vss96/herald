@@ -165,9 +165,11 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('n') => {
                 self.dialog.visible = true;
-                self.dialog.working_dir = std::env::current_dir()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default();
+                self.dialog.working_dir.set(
+                    std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                );
                 self.focus = Focus::Dialog;
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -312,9 +314,9 @@ impl App {
                     && self.dialog.is_valid()
                 {
                     // Submit on last field when valid
-                    let nickname = self.dialog.nickname.clone();
-                    let prompt = self.dialog.prompt.clone();
-                    let working_dir = PathBuf::from(&self.dialog.working_dir);
+                    let nickname = self.dialog.nickname.text.clone();
+                    let prompt = self.dialog.prompt.text.clone();
+                    let working_dir = PathBuf::from(&self.dialog.working_dir.text);
                     tracing::info!(
                         nickname = %nickname,
                         prompt = %prompt,
@@ -348,10 +350,25 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                self.dialog.active_input_mut().pop();
+                self.dialog.active_input().backspace();
+            }
+            KeyCode::Delete => {
+                self.dialog.active_input().delete();
+            }
+            KeyCode::Left => {
+                self.dialog.active_input().move_left();
+            }
+            KeyCode::Right => {
+                self.dialog.active_input().move_right();
+            }
+            KeyCode::Home => {
+                self.dialog.active_input().home();
+            }
+            KeyCode::End => {
+                self.dialog.active_input().end();
             }
             KeyCode::Char(c) => {
-                self.dialog.active_input_mut().push(c);
+                self.dialog.active_input().insert(c);
             }
             _ => {}
         }
@@ -359,15 +376,12 @@ impl App {
 
     /// Tab-complete directory paths (like a terminal).
     fn complete_directory_path(&mut self) {
-        let input = &self.dialog.working_dir;
-        let path = PathBuf::from(input);
+        let input_text = self.dialog.working_dir.text.clone();
+        let path = PathBuf::from(&input_text);
 
-        // Determine the directory to list and the prefix to match
-        let (search_dir, prefix) = if input.ends_with('/') || input.ends_with(std::path::MAIN_SEPARATOR) {
-            // Input ends with / — list contents of this directory
+        let (search_dir, prefix) = if input_text.ends_with('/') || input_text.ends_with(std::path::MAIN_SEPARATOR) {
             (path.clone(), String::new())
         } else {
-            // Input is partial — search parent for entries matching the last component
             let parent = path.parent().unwrap_or_else(|| std::path::Path::new("/"));
             let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             (parent.to_path_buf(), file_name)
@@ -382,7 +396,6 @@ impl App {
             .filter(|e| e.file_type().map_or(false, |ft| ft.is_dir()))
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                // Skip hidden dirs unless the prefix starts with '.'
                 if name.starts_with('.') && !prefix.starts_with('.') {
                     return false;
                 }
@@ -394,17 +407,15 @@ impl App {
         matches.sort();
 
         if matches.len() == 1 {
-            // Single match — complete it with trailing /
             let completed = format!("{}/", matches[0].display());
-            self.dialog.working_dir = completed;
+            self.dialog.working_dir.set(completed);
         } else if matches.len() > 1 {
-            // Multiple matches — complete to longest common prefix
             let names: Vec<String> = matches
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect();
             if let Some(common) = longest_common_prefix(&names) {
-                self.dialog.working_dir = common;
+                self.dialog.working_dir.set(common);
             }
         }
     }
@@ -551,19 +562,18 @@ impl App {
         let inner = block.inner(dialog_area);
         Widget::render(block, dialog_area, buf);
 
-        let fields = [
+        let fields: Vec<(&str, &crate::tui::dialogs::TextInput, bool)> = vec![
             ("Nickname", &self.dialog.nickname, self.dialog.active_field == crate::tui::dialogs::DialogField::Nickname),
             ("Directory", &self.dialog.working_dir, self.dialog.active_field == crate::tui::dialogs::DialogField::WorkingDir),
             ("Prompt", &self.dialog.prompt, self.dialog.active_field == crate::tui::dialogs::DialogField::Prompt),
         ];
 
-        for (i, (label, value, active)) in fields.iter().enumerate() {
+        for (i, (label, input, active)) in fields.iter().enumerate() {
             let y = inner.y + (i as u16) * 2;
             if y >= inner.y + inner.height {
                 break;
             }
 
-            // Label
             let label_style = if *active {
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
@@ -571,21 +581,29 @@ impl App {
             };
             buf.set_string(inner.x, y, format!(" {}:", label), label_style);
 
-            // Input value with cursor
             let input_x = inner.x + 1;
             let input_y = y + 1;
             if input_y < inner.y + inner.height {
-                let display_val = if *active {
-                    format!(" {}█", value)
-                } else {
-                    format!(" {}", value)
-                };
                 let val_style = if *active {
                     Style::default().fg(Color::White)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
-                buf.set_string(input_x, input_y, &display_val, val_style);
+                let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+
+                if *active {
+                    let (before, at, after) = input.parts();
+                    buf.set_string(input_x, input_y, format!(" {}", before), val_style);
+                    let cursor_x = input_x + 1 + before.len() as u16;
+                    let cursor_ch = at.unwrap_or(' ');
+                    buf.set_string(cursor_x, input_y, cursor_ch.to_string(), cursor_style);
+                    if let Some(c) = at {
+                        let after_x = cursor_x + c.len_utf8() as u16;
+                        buf.set_string(after_x, input_y, after, val_style);
+                    }
+                } else {
+                    buf.set_string(input_x, input_y, format!(" {}", &input.text), val_style);
+                }
             }
         }
 
