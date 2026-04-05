@@ -1,3 +1,8 @@
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::{Block, Borders, Widget};
+
 /// A text input field with cursor position.
 #[derive(Debug, Default, Clone)]
 pub struct TextInput {
@@ -122,6 +127,98 @@ impl NewSessionDialog {
 
     pub fn is_valid(&self) -> bool {
         !self.nickname.text.trim().is_empty() && !self.prompt.text.trim().is_empty()
+    }
+}
+
+impl Widget for &NewSessionDialog {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // Center the dialog
+        let dialog_width = 60u16.min(area.width.saturating_sub(4));
+        let dialog_height = 11u16;
+        let x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
+        let y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
+        let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
+
+        // Clear the area behind the dialog
+        for row in dialog_area.y..dialog_area.y + dialog_area.height {
+            for col in dialog_area.x..dialog_area.x + dialog_area.width {
+                if let Some(cell) = buf.cell_mut((col, row)) {
+                    cell.set_char(' ');
+                    cell.set_style(Style::default());
+                }
+            }
+        }
+
+        // Draw border
+        let block = Block::default()
+            .title(" New Session ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(dialog_area);
+        Widget::render(block, dialog_area, buf);
+
+        let fields: Vec<(&str, &TextInput, bool)> = vec![
+            ("Nickname", &self.nickname, self.active_field == DialogField::Nickname),
+            ("Directory", &self.working_dir, self.active_field == DialogField::WorkingDir),
+            ("Prompt", &self.prompt, self.active_field == DialogField::Prompt),
+        ];
+
+        for (i, (label, input, active)) in fields.iter().enumerate() {
+            let y = inner.y + (i as u16) * 2;
+            if y >= inner.y + inner.height {
+                break;
+            }
+
+            let label_style = if *active {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            buf.set_string(inner.x, y, format!(" {}:", label), label_style);
+
+            let input_x = inner.x + 1;
+            let input_y = y + 1;
+            if input_y < inner.y + inner.height {
+                let val_style = if *active {
+                    Style::default().fg(Color::White)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+
+                if *active {
+                    let (before, at, after) = input.parts();
+                    buf.set_string(input_x, input_y, format!(" {}", before), val_style);
+                    let cursor_x = input_x + 1 + before.len() as u16;
+                    let cursor_ch = at.unwrap_or(' ');
+                    buf.set_string(cursor_x, input_y, cursor_ch.to_string(), cursor_style);
+                    if let Some(c) = at {
+                        let after_x = cursor_x + c.len_utf8() as u16;
+                        buf.set_string(after_x, input_y, after, val_style);
+                    }
+                } else {
+                    buf.set_string(input_x, input_y, format!(" {}", &input.text), val_style);
+                }
+            }
+        }
+
+        // Footer — context-sensitive help
+        let footer_y = dialog_area.y + dialog_area.height - 1;
+        if footer_y > dialog_area.y {
+            let help = if self.active_field == DialogField::WorkingDir {
+                " Enter:next  Tab:complete path  Esc:cancel"
+            } else if self.active_field == DialogField::Prompt {
+                " Enter:launch  Tab:next field  Esc:cancel"
+            } else {
+                " Enter:next  Tab:next field  Esc:cancel"
+            };
+            buf.set_string(
+                inner.x,
+                footer_y - 1,
+                help,
+                Style::default().fg(Color::DarkGray),
+            );
+        }
     }
 }
 
