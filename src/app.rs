@@ -8,8 +8,8 @@ use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
 
 use crate::events::queue::AttentionQueue;
-use crate::input::tmux_keys::{self, TmuxKey};
 use crate::events::types::HookEvent;
+use crate::input::tmux_keys::{self, TmuxKey};
 use crate::session::manager::SessionManager;
 use crate::tui::dialogs::NewSessionDialog;
 use crate::tui::layout;
