@@ -63,14 +63,22 @@ impl SessionManager {
             .context("writing prompt file")?;
 
         let wd_escaped = shell_escape(working_dir.display().to_string());
-        let pf_escaped = shell_escape(prompt_file.display().to_string());
-        // Use --worktree if the repo has commits, fall back to plain claude if not
+        // Launch claude interactively (stays alive after completing work).
+        // Fall back to plain claude if repo has no commits (worktree needs HEAD).
         let cmd = format!(
-            "cd {} && (git rev-parse HEAD >/dev/null 2>&1 && claude --worktree -p \"$(cat {})\" || claude -p \"$(cat {})\")",
-            wd_escaped, pf_escaped, pf_escaped,
+            "cd {} && if git rev-parse HEAD >/dev/null 2>&1; then claude --worktree; else claude; fi",
+            wd_escaped,
         );
         commands::send_keys(&pane_id, &cmd).await?;
         commands::send_keys(&pane_id, "Enter").await?;
+
+        // Wait for claude to start, then type the prompt as first message
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        commands::send_keys_literal(&pane_id, prompt).await?;
+        commands::send_special_key(&pane_id, "Enter").await?;
+
+        // Clean up prompt file (no longer needed)
+        let _ = tokio::fs::remove_file(&prompt_file).await;
 
         let mut session = Session::new(
             session_id.clone(),
