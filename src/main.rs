@@ -275,6 +275,14 @@ async fn run_loop(
             break;
         }
 
+        // Compute batch flush delay before entering select
+        let batch_delay = app
+            .key_batcher
+            .flush_deadline()
+            .map(|d| d.saturating_duration_since(std::time::Instant::now()))
+            .unwrap_or(std::time::Duration::from_secs(86400));
+        let has_batch = !app.key_batcher.is_empty();
+
         // Wait for the next event from any source
         tokio::select! {
             event = app.event_rx.recv() => {
@@ -288,6 +296,9 @@ async fn run_loop(
                     Some(AppEvent::Tick) => {}
                     None => break,
                 }
+            }
+            _ = tokio::time::sleep(batch_delay), if has_batch => {
+                app.flush_key_batch();
             }
             _ = tick_interval.tick() => {
                 // Just triggers a re-render cycle

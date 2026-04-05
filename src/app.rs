@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::events::queue::AttentionQueue;
 use crate::events::types::HookEvent;
+use crate::input::batcher::KeyBatcher;
 use crate::input::tmux_keys::{self, TmuxKey};
 use crate::session::manager::SessionManager;
 use crate::tui::dialogs::NewSessionDialog;
@@ -43,6 +44,8 @@ pub struct App {
     pub event_tx: Option<mpsc::UnboundedSender<crate::AppEvent>>,
     /// Receiver end — moved into the run_loop
     pub event_rx: mpsc::UnboundedReceiver<crate::AppEvent>,
+    /// Batches literal keystrokes to reduce tmux process spawns.
+    pub key_batcher: KeyBatcher,
     idle_threshold: Duration,
 }
 
@@ -64,6 +67,7 @@ impl App {
             pending_kill: None,
             event_tx: None,
             event_rx: rx,
+            key_batcher: KeyBatcher::new(),
             idle_threshold: Duration::from_secs(3),
         }
     }
@@ -181,6 +185,7 @@ impl App {
     fn handle_main_area_key(&mut self, key: KeyEvent) {
         // Ctrl+G returns to sidebar (like tmux's Ctrl+B prefix concept)
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+            self.flush_key_batch();
             self.focus = Focus::Sidebar;
             return;
         }
@@ -191,11 +196,28 @@ impl App {
                 let pane_id = session.tmux_pane_id.clone();
                 match tmux_keys::map_key(key) {
                     TmuxKey::Special(k) => {
+                        // Flush pending literals before sending a special key
+                        self.flush_key_batch();
                         tokio::spawn(async move {
                             let _ = crate::tmux::commands::send_special_key(&pane_id, &k).await;
                         });
                     }
+                    TmuxKey::Literal(s) if s.len() == 1 => {
+                        // Single char — batch it
+                        if let Some((old_pane, old_batch)) =
+                            self.key_batcher.push_literal(&pane_id, &s)
+                        {
+                            tokio::spawn(async move {
+                                let _ = crate::tmux::commands::send_keys_literal(
+                                    &old_pane, &old_batch,
+                                )
+                                .await;
+                            });
+                        }
+                    }
                     TmuxKey::Literal(s) => {
+                        // Multi-char literal (e.g. "C-c") — flush batch, send individually
+                        self.flush_key_batch();
                         tokio::spawn(async move {
                             let _ = crate::tmux::commands::send_keys_literal(&pane_id, &s).await;
                         });
@@ -203,6 +225,15 @@ impl App {
                     TmuxKey::Ignored => {}
                 }
             }
+        }
+    }
+
+    /// Flush any pending batched keystrokes to tmux.
+    pub fn flush_key_batch(&mut self) {
+        if let Some((pane_id, batch)) = self.key_batcher.take() {
+            tokio::spawn(async move {
+                let _ = crate::tmux::commands::send_keys_literal(&pane_id, &batch).await;
+            });
         }
     }
 
