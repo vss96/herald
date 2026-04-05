@@ -188,6 +188,7 @@ impl App {
                 // Focus the selected session in main area
                 if let Some(session) = self.session_ids().get(self.sidebar_index) {
                     self.active_session_id = Some(session.clone());
+                    self.captured_content = None; // Force refresh on next tick
                     self.focus = Focus::MainArea;
                 }
             }

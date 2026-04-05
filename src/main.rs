@@ -259,14 +259,23 @@ async fn run_loop(
     let mut drain_interval = tokio::time::interval(std::time::Duration::from_secs(2));
 
     loop {
-        // Render every tick
+        // Always refresh the active pane content before rendering
+        app.refresh_active_terminal().await;
+
+        // Render
         terminal.draw(|frame| {
             app.render(frame.area(), frame.buffer_mut());
         })?;
 
+        // Process pending async actions
+        app.process_pending_kill().await;
+
+        if app.should_quit {
+            break;
+        }
+
         // Wait for the next event from any source
         tokio::select! {
-            // Keyboard or hook event from the unified channel
             event = app.event_rx.recv() => {
                 match event {
                     Some(AppEvent::Key(key)) => {
@@ -276,24 +285,15 @@ async fn run_loop(
                         app.handle_hook_event(hook_event);
                     }
                     Some(AppEvent::Tick) => {}
-                    None => break, // All senders dropped
+                    None => break,
                 }
             }
-            // Tick: refresh active terminal from tmux capture-pane
             _ = tick_interval.tick() => {
-                app.refresh_active_terminal().await;
+                // Just triggers a re-render cycle
             }
-            // Periodic buffer drain: catches events missed by socket delivery
             _ = drain_interval.tick() => {
                 app.drain_all_buffers().await;
             }
-        }
-
-        // Process pending async actions
-        app.process_pending_kill().await;
-
-        if app.should_quit {
-            break;
         }
     }
     Ok(())
