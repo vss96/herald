@@ -4,7 +4,7 @@ use std::time::Instant;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use crate::session::model::{AttentionReason, Session, SessionStatus};
+use crate::session::model::{AttentionReason, Session, SessionId, SessionStatus};
 
 /// Convert a ratatui Buffer into a readable string for snapshot testing.
 /// Iterates row-by-row, collects cell symbols, trims trailing whitespace,
@@ -47,7 +47,7 @@ pub fn render_to_string<W: ratatui::widgets::Widget>(widget: W, width: u16, heig
 /// Create a test Session with the given status.
 pub fn make_test_session(id: &str, nickname: &str, status: SessionStatus) -> Session {
     let mut s = Session::new(
-        id.to_string(),
+        SessionId(id.to_string()),
         nickname.to_string(),
         "test prompt".to_string(),
         PathBuf::from("/tmp"),

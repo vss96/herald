@@ -69,7 +69,7 @@ impl<'a> Widget for Sidebar<'a> {
             .map(|(i, session)| {
                 let is_active = self
                     .active_session_id
-                    .map_or(false, |id| id == session.id);
+                    .map_or(false, |id| id == session.id.as_str());
                 let is_selected = i == self.selected_index;
 
                 let (indicator, session_color) = session_style(&session.status);

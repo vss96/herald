@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::events::types::{HookEvent, HookEventName, Priority};
-use crate::session::model::AttentionReason;
+use crate::session::model::{AttentionReason, SessionId};
 
 /// An entry in the attention queue.
 #[derive(Debug, Clone)]
 pub struct QueueEntry {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub priority: Priority,
     pub reason: AttentionReason,
     pub entered_at: Instant,
@@ -24,9 +24,9 @@ pub struct QueueEntry {
 /// - Re-entry cooldown of 5 seconds per priority tier
 /// - Stale entries (>5 min) can be manually dismissed
 pub struct AttentionQueue {
-    entries: HashMap<String, QueueEntry>,
+    entries: HashMap<SessionId, QueueEntry>,
     /// Last time a session entered a given priority tier (for fairness cooldown)
-    last_entry_time: HashMap<(String, Priority), Instant>,
+    last_entry_time: HashMap<(SessionId, Priority), Instant>,
     /// Debounce window for error coalescing
     debounce_duration: Duration,
     /// Cooldown before a session can re-enter the same tier
@@ -139,7 +139,7 @@ impl AttentionQueue {
     }
 
     /// Try to resolve a permission prompt by matching tool_use_id.
-    fn try_resolve_permission(&mut self, session_id: &str, tool_use_id: Option<&str>) -> bool {
+    fn try_resolve_permission(&mut self, session_id: &SessionId, tool_use_id: Option<&str>) -> bool {
         if let Some(entry) = self.entries.get(session_id) {
             if let AttentionReason::PermissionPrompt {
                 tool_use_id: ref pending_id,
@@ -162,7 +162,7 @@ impl AttentionQueue {
     }
 
     /// Dismiss an error entry for a session (user explicit action).
-    pub fn dismiss_error(&mut self, session_id: &str) -> bool {
+    pub fn dismiss_error(&mut self, session_id: &SessionId) -> bool {
         if let Some(entry) = self.entries.get(session_id) {
             if matches!(entry.reason, AttentionReason::ToolError { .. }) {
                 self.entries.remove(session_id);
@@ -173,7 +173,7 @@ impl AttentionQueue {
     }
 
     /// Dismiss a completion entry for a session (user viewed and dismissed).
-    pub fn dismiss_completion(&mut self, session_id: &str) -> bool {
+    pub fn dismiss_completion(&mut self, session_id: &SessionId) -> bool {
         if let Some(entry) = self.entries.get(session_id) {
             if matches!(entry.reason, AttentionReason::Completed) {
                 self.entries.remove(session_id);
@@ -198,18 +198,18 @@ impl AttentionQueue {
     }
 
     /// Check if a session has a stale entry.
-    pub fn is_stale(&self, session_id: &str) -> bool {
+    pub fn is_stale(&self, session_id: &SessionId) -> bool {
         self.is_stale_at(session_id, Instant::now())
     }
 
-    fn is_stale_at(&self, session_id: &str, now: Instant) -> bool {
+    fn is_stale_at(&self, session_id: &SessionId, now: Instant) -> bool {
         self.entries
             .get(session_id)
             .is_some_and(|e| now.duration_since(e.entered_at) > self.stale_threshold)
     }
 
     /// Force-dismiss a stale entry.
-    pub fn dismiss_stale(&mut self, session_id: &str) -> bool {
+    pub fn dismiss_stale(&mut self, session_id: &SessionId) -> bool {
         if self.is_stale(session_id) {
             self.entries.remove(session_id);
             return true;
@@ -225,7 +225,7 @@ impl AttentionQueue {
         self.entries.is_empty()
     }
 
-    pub fn get(&self, session_id: &str) -> Option<&QueueEntry> {
+    pub fn get(&self, session_id: &SessionId) -> Option<&QueueEntry> {
         self.entries.get(session_id)
     }
 }
@@ -236,13 +236,17 @@ mod tests {
 
     fn make_event(session_id: &str, name: HookEventName, tool_use_id: Option<&str>) -> HookEvent {
         HookEvent {
-            session_id: session_id.to_string(),
+            session_id: SessionId(session_id.to_string()),
             hook_event_name: name,
             tool_name: Some("Edit".to_string()),
             tool_use_id: tool_use_id.map(|s| s.to_string()),
             tool_input: None,
             cwd: None,
         }
+    }
+
+    fn sid(s: &str) -> SessionId {
+        SessionId(s.to_string())
     }
 
     // ── Basic queue behavior ──
@@ -253,7 +257,7 @@ mod tests {
         let event = make_event("s1", HookEventName::PermissionRequest, Some("t1"));
         assert!(q.process_event(&event));
         assert_eq!(q.len(), 1);
-        assert_eq!(q.get("s1").unwrap().priority, Priority::High);
+        assert_eq!(q.get(&sid("s1")).unwrap().priority, Priority::High);
     }
 
     #[test]
@@ -261,7 +265,7 @@ mod tests {
         let mut q = AttentionQueue::new();
         let event = make_event("s1", HookEventName::PostToolUseFailure, None);
         assert!(q.process_event(&event));
-        assert_eq!(q.get("s1").unwrap().priority, Priority::Critical);
+        assert_eq!(q.get(&sid("s1")).unwrap().priority, Priority::Critical);
     }
 
     #[test]
@@ -269,7 +273,7 @@ mod tests {
         let mut q = AttentionQueue::new();
         let event = make_event("s1", HookEventName::Stop, None);
         assert!(q.process_event(&event));
-        assert_eq!(q.get("s1").unwrap().priority, Priority::Low);
+        assert_eq!(q.get(&sid("s1")).unwrap().priority, Priority::Low);
     }
 
     #[test]
@@ -289,7 +293,7 @@ mod tests {
         q.process_event(&e2);
         assert_eq!(q.len(), 1);
         // Higher priority replaced lower
-        assert_eq!(q.get("s1").unwrap().priority, Priority::High);
+        assert_eq!(q.get(&sid("s1")).unwrap().priority, Priority::High);
     }
 
     #[test]
@@ -299,7 +303,7 @@ mod tests {
         q.process_event(&e1);
         let e2 = make_event("s1", HookEventName::Stop, None);
         assert!(!q.process_event(&e2));
-        assert_eq!(q.get("s1").unwrap().priority, Priority::High);
+        assert_eq!(q.get(&sid("s1")).unwrap().priority, Priority::High);
     }
 
     // ── Resolution-based clearing ──
@@ -360,7 +364,7 @@ mod tests {
         let mut q = AttentionQueue::new();
         let error = make_event("s1", HookEventName::PostToolUseFailure, None);
         q.process_event(&error);
-        assert!(q.dismiss_error("s1"));
+        assert!(q.dismiss_error(&sid("s1")));
         assert!(q.is_empty());
     }
 
@@ -369,7 +373,7 @@ mod tests {
         let mut q = AttentionQueue::new();
         let perm = make_event("s1", HookEventName::PermissionRequest, Some("t1"));
         q.process_event(&perm);
-        assert!(!q.dismiss_error("s1"));
+        assert!(!q.dismiss_error(&sid("s1")));
         assert_eq!(q.len(), 1);
     }
 
@@ -378,7 +382,7 @@ mod tests {
         let mut q = AttentionQueue::new();
         let stop = make_event("s1", HookEventName::Stop, None);
         q.process_event(&stop);
-        assert!(q.dismiss_completion("s1"));
+        assert!(q.dismiss_completion(&sid("s1")));
         assert!(q.is_empty());
     }
 
@@ -394,7 +398,7 @@ mod tests {
         let perm = make_event("s3", HookEventName::PermissionRequest, Some("t1"));
         q.process_event(&perm);
 
-        assert_eq!(q.peek().unwrap().session_id, "s2"); // Critical > High > Low
+        assert_eq!(q.peek().unwrap().session_id, sid("s2")); // Critical > High > Low
     }
 
     #[test]
@@ -408,7 +412,7 @@ mod tests {
         q.process_event_at(&e2, now + Duration::from_millis(100));
 
         // s1 entered first, should be peeked first
-        assert_eq!(q.peek().unwrap().session_id, "s1");
+        assert_eq!(q.peek().unwrap().session_id, sid("s1"));
     }
 
     // ── Debounce ──
@@ -504,8 +508,8 @@ mod tests {
         let e = make_event("s1", HookEventName::PermissionRequest, Some("t1"));
         q.process_event_at(&e, now);
 
-        assert!(!q.is_stale_at("s1", now + Duration::from_secs(299)));
-        assert!(q.is_stale_at("s1", now + Duration::from_secs(301)));
+        assert!(!q.is_stale_at(&sid("s1"), now + Duration::from_secs(299)));
+        assert!(q.is_stale_at(&sid("s1"), now + Duration::from_secs(301)));
     }
 
     // ── Multiple sessions ──
@@ -525,8 +529,8 @@ mod tests {
         let resolve = make_event("s1", HookEventName::PostToolUse, Some("t1"));
         q.process_event(&resolve);
         assert_eq!(q.len(), 2);
-        assert!(q.get("s1").is_none());
-        assert!(q.get("s2").is_some());
-        assert!(q.get("s3").is_some());
+        assert!(q.get(&sid("s1")).is_none());
+        assert!(q.get(&sid("s2")).is_some());
+        assert!(q.get(&sid("s3")).is_some());
     }
 }

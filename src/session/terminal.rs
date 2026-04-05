@@ -250,15 +250,17 @@ impl<'a> vte::Perform for TermPerformer<'a> {
             // Erase in Display (ED)
             'J' => {
                 let mode = params.first().copied().unwrap_or(0);
+                let r = *self.cursor_row as usize;
+                let c = *self.cursor_col as usize;
                 match mode {
                     // Clear from cursor to end of screen
-                    0 => {
-                        for c in (*self.cursor_col as usize)..self.cols as usize {
-                            self.grid[*self.cursor_row as usize][c] = Cell::default();
+                    0 if r < self.grid.len() => {
+                        for col in c..self.grid[r].len() {
+                            self.grid[r][col] = Cell::default();
                         }
-                        for r in (*self.cursor_row as usize + 1)..self.rows as usize {
-                            for c in 0..self.cols as usize {
-                                self.grid[r][c] = Cell::default();
+                        for row in (r + 1)..self.grid.len() {
+                            for cell in self.grid[row].iter_mut() {
+                                *cell = Cell::default();
                             }
                         }
                     }

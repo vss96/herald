@@ -3,15 +3,17 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::session::model::Session;
+use crate::events::types::HookEventName;
+use crate::session::model::{PaneId, Session, SessionId};
 use crate::tmux::commands;
 
 const TMUX_SESSION_NAME: &str = "herald";
 const PANE_METADATA_KEY: &str = "@herald_session_id";
+const SESSION_FILE_EXTENSIONS: &[&str] = &["sock", "buffer", "prompt", "lock"];
 
 /// Manages the lifecycle of all Claude Code sessions.
 pub struct SessionManager {
-    sessions: HashMap<String, Session>,
+    sessions: HashMap<SessionId, Session>,
     runtime_dir: PathBuf,
     terminal_cols: u16,
     terminal_rows: u16,
@@ -41,18 +43,19 @@ impl SessionManager {
         nickname: &str,
         prompt: &str,
         working_dir: &Path,
-    ) -> Result<String> {
-        let session_id = uuid::Uuid::new_v4().to_string();
+    ) -> Result<SessionId> {
+        let session_id = SessionId(uuid::Uuid::new_v4().to_string());
 
-        let pane_id = commands::new_window(TMUX_SESSION_NAME, nickname).await?;
-        commands::set_pane_option(&pane_id, PANE_METADATA_KEY, &session_id).await?;
+        let pane_id_str = commands::new_window(TMUX_SESSION_NAME, nickname).await?;
+        let pane_id = PaneId(pane_id_str);
+        commands::set_pane_option(pane_id.as_str(), PANE_METADATA_KEY, session_id.as_str()).await?;
 
         // write_hook_config uses std::fs — run on blocking pool
         let rt_dir = self.runtime_dir.clone();
         let wd = working_dir.to_path_buf();
-        let sid = session_id.clone();
+        let sid_str = session_id.0.clone();
         tokio::task::spawn_blocking(move || {
-            write_hook_config(&rt_dir, &wd, &sid)
+            write_hook_config(&rt_dir, &wd, &sid_str)
         })
         .await??;
 
@@ -69,13 +72,13 @@ impl SessionManager {
             "cd {} && if git rev-parse HEAD >/dev/null 2>&1; then claude --worktree; else claude; fi",
             wd_escaped,
         );
-        commands::send_keys(&pane_id, &cmd).await?;
-        commands::send_keys(&pane_id, "Enter").await?;
+        commands::send_keys(pane_id.as_str(), &cmd).await?;
+        commands::send_keys(pane_id.as_str(), "Enter").await?;
 
         // Wait for claude to start, then type the prompt as first message
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        commands::send_keys_literal(&pane_id, prompt).await?;
-        commands::send_special_key(&pane_id, "Enter").await?;
+        commands::send_keys_literal(pane_id.as_str(), prompt).await?;
+        commands::send_special_key(pane_id.as_str(), "Enter").await?;
 
         // Clean up prompt file (no longer needed)
         let _ = tokio::fs::remove_file(&prompt_file).await;
@@ -95,32 +98,31 @@ impl SessionManager {
     }
 
     /// Kill a session by ID.
-    pub async fn kill(&mut self, session_id: &str) -> Result<()> {
+    pub async fn kill(&mut self, session_id: &SessionId) -> Result<()> {
         if let Some(session) = self.sessions.get(session_id) {
             // Kill by pane ID (not nickname — nicknames aren't unique)
-            let _ = commands::kill_pane(&session.tmux_pane_id).await;
+            let _ = commands::kill_pane(session.tmux_pane_id.as_str()).await;
             let rt_dir = self.runtime_dir.clone();
             let sid = session_id.to_string();
-            let _ = tokio::fs::remove_file(rt_dir.join(format!("{}.sock", &sid))).await;
-            let _ = tokio::fs::remove_file(rt_dir.join(format!("{}.buffer", &sid))).await;
-            let _ = tokio::fs::remove_file(rt_dir.join(format!("{}.prompt", &sid))).await;
-            let _ = tokio::fs::remove_file(rt_dir.join(format!("{}.lock", &sid))).await;
+            for ext in SESSION_FILE_EXTENSIONS {
+                let _ = tokio::fs::remove_file(rt_dir.join(format!("{}.{}", &sid, ext))).await;
+            }
         }
         self.sessions.remove(session_id);
         Ok(())
     }
 
-    pub fn rename(&mut self, session_id: &str, new_name: &str) {
+    pub fn rename(&mut self, session_id: &SessionId, new_name: &str) {
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.nickname = new_name.to_string();
         }
     }
 
-    pub fn get(&self, session_id: &str) -> Option<&Session> {
+    pub fn get(&self, session_id: &SessionId) -> Option<&Session> {
         self.sessions.get(session_id)
     }
 
-    pub fn get_mut(&mut self, session_id: &str) -> Option<&mut Session> {
+    pub fn get_mut(&mut self, session_id: &SessionId) -> Option<&mut Session> {
         self.sessions.get_mut(session_id)
     }
 
@@ -143,7 +145,7 @@ impl SessionManager {
     }
 
     /// Discover existing sessions from a previous TUI instance.
-    pub async fn discover_existing(&mut self) -> Result<Vec<String>> {
+    pub async fn discover_existing(&mut self) -> Result<Vec<SessionId>> {
         if !commands::has_session(TMUX_SESSION_NAME).await? {
             return Ok(vec![]);
         }
@@ -157,13 +159,13 @@ impl SessionManager {
         for line in panes {
             let parts: Vec<&str> = line.splitn(4, '\t').collect();
             if parts.len() >= 4 && !parts[2].is_empty() {
-                let pane_id = parts[0].to_string();
+                let pane_id = PaneId(parts[0].to_string());
                 let nickname = parts[1].to_string();
-                let session_id = parts[2].to_string();
+                let session_id = SessionId(parts[2].to_string());
                 let command = parts[3];
 
                 // Skip panes running herald itself (the default shell from new-session)
-                if command == "herald" {
+                if command == TMUX_SESSION_NAME {
                     tracing::info!(pane_id = %pane_id, "skipping herald's own pane");
                     continue;
                 }
@@ -222,14 +224,6 @@ fn write_hook_config(runtime_dir: &Path, working_dir: &Path, session_id: &str) -
         }]
     });
 
-    let hook_events = [
-        "PermissionRequest",
-        "PostToolUse",
-        "PostToolUseFailure",
-        "Stop",
-        "Notification",
-    ];
-
     let config_path = claude_dir.join("settings.local.json");
     let mut config: serde_json::Value = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)
@@ -245,8 +239,9 @@ fn write_hook_config(runtime_dir: &Path, working_dir: &Path, session_id: &str) -
 
     // Remove stale herald hooks
     if let Some(hooks) = config["hooks"].as_object_mut() {
-        for event_name in &hook_events {
-            if let Some(arr) = hooks.get_mut(*event_name).and_then(|v| v.as_array_mut()) {
+        for event in HookEventName::MANAGED {
+            let event_name = event.as_config_str();
+            if let Some(arr) = hooks.get_mut(event_name).and_then(|v| v.as_array_mut()) {
                 arr.retain(|entry| {
                     !entry["hooks"]
                         .as_array()
@@ -263,7 +258,8 @@ fn write_hook_config(runtime_dir: &Path, working_dir: &Path, session_id: &str) -
     }
 
     // Append herald hooks
-    for event_name in &hook_events {
+    for event in HookEventName::MANAGED {
+        let event_name = event.as_config_str();
         let hooks_array = config["hooks"][event_name]
             .as_array()
             .cloned()

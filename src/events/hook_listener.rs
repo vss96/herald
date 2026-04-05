@@ -6,6 +6,7 @@ use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 
 use crate::events::types::HookEvent;
+use crate::session::model::SessionId;
 
 /// Listens on a per-session Unix socket for hook events.
 pub struct HookListener {
@@ -14,7 +15,7 @@ pub struct HookListener {
 }
 
 impl HookListener {
-    pub fn new(runtime_dir: &Path, session_id: &str) -> Self {
+    pub fn new(runtime_dir: &Path, session_id: &SessionId) -> Self {
         Self {
             socket_path: runtime_dir.join(format!("{}.sock", session_id)),
             buffer_path: runtime_dir.join(format!("{}.buffer", session_id)),
@@ -105,7 +106,7 @@ mod tests {
     #[tokio::test]
     async fn drain_buffer_parses_events() {
         let dir = tempfile::tempdir().unwrap();
-        let listener = HookListener::new(dir.path(), "test-session");
+        let listener = HookListener::new(dir.path(), &SessionId("test-session".into()));
 
         // Write some buffered events
         let events = vec![
@@ -130,7 +131,7 @@ mod tests {
     #[tokio::test]
     async fn drain_buffer_missing_file_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let listener = HookListener::new(dir.path(), "nonexistent");
+        let listener = HookListener::new(dir.path(), &SessionId("nonexistent".into()));
         let drained = listener.drain_buffer().await.unwrap();
         assert!(drained.is_empty());
     }
@@ -138,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn drain_buffer_skips_malformed_lines() {
         let dir = tempfile::tempdir().unwrap();
-        let listener = HookListener::new(dir.path(), "test-session");
+        let listener = HookListener::new(dir.path(), &SessionId("test-session".into()));
 
         let content = [
             r#"{"session_id":"s1","hook_event_name":"Stop"}"#,
@@ -157,7 +158,7 @@ mod tests {
     #[tokio::test]
     async fn socket_listener_receives_events() {
         let dir = tempfile::tempdir().unwrap();
-        let listener = HookListener::new(dir.path(), "test-session");
+        let listener = HookListener::new(dir.path(), &SessionId("test-session".into()));
 
         let (tx, mut rx) = mpsc::channel(10);
 
@@ -185,7 +186,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(event.session_id, "s1");
+        assert_eq!(event.session_id.as_str(), "s1");
         assert_eq!(event.hook_event_name, HookEventName::PermissionRequest);
     }
 }

@@ -1,7 +1,52 @@
+use std::borrow::Borrow;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use serde::Deserialize;
+
 use crate::session::terminal::TerminalBuffer;
+
+/// Strongly-typed session identifier (UUID string).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+pub struct SessionId(pub String);
+
+impl std::fmt::Display for SessionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl SessionId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for SessionId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Strongly-typed tmux pane identifier (e.g., "%1").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneId(pub String);
+
+impl std::fmt::Display for PaneId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl PaneId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 /// Status of a Claude Code session.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,9 +74,9 @@ pub enum AttentionReason {
 
 /// A managed Claude Code session.
 pub struct Session {
-    pub id: String,
+    pub id: SessionId,
     pub nickname: String,
-    pub tmux_pane_id: String,
+    pub tmux_pane_id: PaneId,
     pub prompt: String,
     pub working_dir: PathBuf,
     pub status: SessionStatus,
@@ -41,7 +86,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(
-        id: String,
+        id: SessionId,
         nickname: String,
         prompt: String,
         working_dir: PathBuf,
@@ -51,7 +96,7 @@ impl Session {
         Self {
             id,
             nickname,
-            tmux_pane_id: String::new(),
+            tmux_pane_id: PaneId(String::new()),
             prompt,
             working_dir,
             status: SessionStatus::Starting,
@@ -90,7 +135,7 @@ mod tests {
     #[test]
     fn new_session_starts_in_starting_state() {
         let s = Session::new(
-            "id1".into(),
+            SessionId("id1".into()),
             "test".into(),
             "fix tests".into(),
             PathBuf::from("/tmp"),
@@ -104,7 +149,7 @@ mod tests {
     #[test]
     fn stopped_session_is_not_alive() {
         let mut s = Session::new(
-            "id1".into(),
+            SessionId("id1".into()),
             "test".into(),
             "fix tests".into(),
             PathBuf::from("/tmp"),
@@ -118,7 +163,7 @@ mod tests {
     #[test]
     fn status_labels() {
         let mut s = Session::new(
-            "id1".into(),
+            SessionId("id1".into()),
             "test".into(),
             "prompt".into(),
             PathBuf::from("/tmp"),

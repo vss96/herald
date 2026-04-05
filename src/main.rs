@@ -26,12 +26,19 @@ enum AppEvent {
     Tick,
 }
 
+/// Get the current user's UID.
+///
+/// SAFETY: `libc::getuid()` has no preconditions and cannot fail.
+fn current_uid() -> u32 {
+    unsafe { libc::getuid() }
+}
+
 /// Determine the runtime directory for sockets and buffers.
 fn runtime_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(xdg).join("herald")
     } else {
-        let uid = unsafe { libc::getuid() };
+        let uid = current_uid();
         std::env::temp_dir().join(format!("herald-{}", uid))
     }
 }
@@ -52,7 +59,7 @@ fn ensure_runtime_dir(dir: &PathBuf) -> Result<()> {
             use std::os::unix::fs::MetadataExt;
             use std::os::unix::fs::PermissionsExt;
             let meta = std::fs::metadata(dir).context("reading runtime dir metadata")?;
-            let uid = unsafe { libc::getuid() };
+            let uid = current_uid();
             if meta.uid() != uid {
                 anyhow::bail!(
                     "runtime directory {} is owned by uid {}, expected {}",
@@ -116,7 +123,7 @@ fn spawn_keyboard_reader(tx: mpsc::UnboundedSender<AppEvent>) {
 /// Drains any buffered events first (from before the socket was listening).
 pub fn spawn_hook_listener(
     runtime_dir: &PathBuf,
-    session_id: &str,
+    session_id: &session::model::SessionId,
     tx: mpsc::UnboundedSender<AppEvent>,
 ) {
     let listener = HookListener::new(runtime_dir, session_id);
@@ -189,7 +196,7 @@ async fn main() -> Result<()> {
     }
 
     tracing::info!("herald starting, log: {}", log_path.display());
-    tracing::info!("pid: {}, uid: {}", std::process::id(), unsafe { libc::getuid() });
+    tracing::info!("pid: {}, uid: {}", std::process::id(), current_uid());
 
     // Setup runtime directory
     let rt_dir = runtime_dir();

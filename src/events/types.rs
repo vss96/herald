@@ -1,9 +1,11 @@
 use serde::Deserialize;
 
+use crate::session::model::SessionId;
+
 /// A hook event received from Claude Code via Unix socket.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct HookEvent {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub hook_event_name: HookEventName,
     #[serde(default)]
     pub tool_name: Option<String>,
@@ -55,6 +57,29 @@ impl HookEventName {
     pub fn is_queueable(&self) -> bool {
         self.priority() > Priority::Info
     }
+
+    /// Hook events that Herald subscribes to in Claude Code config.
+    pub const MANAGED: &[HookEventName] = &[
+        HookEventName::PermissionRequest,
+        HookEventName::PostToolUse,
+        HookEventName::PostToolUseFailure,
+        HookEventName::Stop,
+        HookEventName::Notification,
+    ];
+
+    /// Serde variant name for use in JSON hook configuration.
+    pub fn as_config_str(&self) -> &'static str {
+        match self {
+            Self::PermissionRequest => "PermissionRequest",
+            Self::PreToolUse => "PreToolUse",
+            Self::PostToolUse => "PostToolUse",
+            Self::PostToolUseFailure => "PostToolUseFailure",
+            Self::Stop => "Stop",
+            Self::Notification => "Notification",
+            Self::SessionStart => "SessionStart",
+            Self::SessionEnd => "SessionEnd",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -72,7 +97,7 @@ mod tests {
             "cwd": "/home/user/project"
         }"#;
         let event: HookEvent = serde_json::from_str(json).unwrap();
-        assert_eq!(event.session_id, "abc123");
+        assert_eq!(event.session_id.as_str(), "abc123");
         assert_eq!(event.hook_event_name, HookEventName::PermissionRequest);
         assert_eq!(event.tool_name.as_deref(), Some("Edit"));
         assert_eq!(event.tool_use_id.as_deref(), Some("toolu_01ABC"));

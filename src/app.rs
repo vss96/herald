@@ -12,6 +12,7 @@ use crate::events::types::HookEvent;
 use crate::input::batcher::KeyBatcher;
 use crate::input::tmux_keys::{self, TmuxKey};
 use crate::session::manager::SessionManager;
+use crate::session::model::SessionId;
 use crate::tui::dialogs::NewSessionDialog;
 use crate::tui::layout;
 use crate::tui::main_area::MainArea;
@@ -29,7 +30,7 @@ pub enum Focus {
 pub struct App {
     pub session_manager: SessionManager,
     pub attention_queue: AttentionQueue,
-    pub active_session_id: Option<String>,
+    pub active_session_id: Option<SessionId>,
     pub focus: Focus,
     pub sidebar_index: usize,
     pub dialog: NewSessionDialog,
@@ -39,7 +40,7 @@ pub struct App {
     /// Raw captured pane content for the active session (rendered directly)
     pub captured_content: Option<String>,
     /// Session ID pending kill (processed async in the event loop)
-    pub pending_kill: Option<String>,
+    pub pending_kill: Option<SessionId>,
     /// Channel for sending events into the main loop (used to spawn hook listeners)
     pub event_tx: Option<mpsc::UnboundedSender<crate::AppEvent>>,
     /// Receiver end — moved into the run_loop
@@ -193,23 +194,23 @@ impl App {
         // Forward all keys to the active tmux pane (including Esc)
         if let Some(ref session_id) = self.active_session_id {
             if let Some(session) = self.session_manager.get(session_id) {
-                let pane_id = session.tmux_pane_id.clone();
+                let pane_str = session.tmux_pane_id.0.clone();
                 match tmux_keys::map_key(key) {
                     TmuxKey::Special(k) => {
                         // Flush pending literals before sending a special key
                         self.flush_key_batch();
                         tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_special_key(&pane_id, &k).await;
+                            let _ = crate::tmux::commands::send_special_key(&pane_str, &k).await;
                         });
                     }
                     TmuxKey::Literal(s) if s.len() == 1 => {
                         // Single char — batch it
-                        if let Some((old_pane, old_batch)) =
-                            self.key_batcher.push_literal(&pane_id, &s)
+                        if let Some(stale) =
+                            self.key_batcher.push_literal(&pane_str, &s)
                         {
                             tokio::spawn(async move {
                                 let _ = crate::tmux::commands::send_keys_literal(
-                                    &old_pane, &old_batch,
+                                    &stale.pane_id, &stale.text,
                                 )
                                 .await;
                             });
@@ -219,7 +220,7 @@ impl App {
                         // Multi-char literal (e.g. "C-c") — flush batch, send individually
                         self.flush_key_batch();
                         tokio::spawn(async move {
-                            let _ = crate::tmux::commands::send_keys_literal(&pane_id, &s).await;
+                            let _ = crate::tmux::commands::send_keys_literal(&pane_str, &s).await;
                         });
                     }
                     TmuxKey::Ignored => {}
@@ -230,9 +231,9 @@ impl App {
 
     /// Flush any pending batched keystrokes to tmux.
     pub fn flush_key_batch(&mut self) {
-        if let Some((pane_id, batch)) = self.key_batcher.take() {
+        if let Some(batch) = self.key_batcher.take() {
             tokio::spawn(async move {
-                let _ = crate::tmux::commands::send_keys_literal(&pane_id, &batch).await;
+                let _ = crate::tmux::commands::send_keys_literal(&batch.pane_id, &batch.text).await;
             });
         }
     }
@@ -329,7 +330,7 @@ impl App {
         self.attention_queue.dismiss_completion(&id);
 
         // Fix active session and sidebar index
-        if self.active_session_id.as_deref() == Some(&id) {
+        if self.active_session_id.as_ref() == Some(&id) {
             self.active_session_id = self.session_ids().first().cloned();
             self.captured_content = None;
         }
@@ -343,7 +344,7 @@ impl App {
 
     /// Drain buffer files for all sessions — fallback for when socket delivery fails.
     pub async fn drain_all_buffers(&mut self) {
-        let session_ids: Vec<String> = self
+        let session_ids: Vec<SessionId> = self
             .session_manager
             .sessions()
             .map(|s| s.id.clone())
@@ -386,7 +387,7 @@ impl App {
             }
         };
 
-        match crate::tmux::commands::capture_pane(&pane_id).await {
+        match crate::tmux::commands::capture_pane(pane_id.as_str()).await {
             Ok(content) => {
                 self.captured_content = if content.is_empty() { None } else { Some(content) };
             }
@@ -425,13 +426,13 @@ impl App {
     }
 
     /// Get sorted session IDs (stable ordering for sidebar).
-    fn session_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self
+    fn session_ids(&self) -> Vec<SessionId> {
+        let mut ids: Vec<SessionId> = self
             .session_manager
             .sessions()
             .map(|s| s.id.clone())
             .collect();
-        ids.sort();
+        ids.sort_by(|a, b| a.0.cmp(&b.0));
         ids
     }
 
@@ -448,7 +449,7 @@ impl App {
             .collect();
         let sidebar = Sidebar::new(
             &sessions,
-            self.active_session_id.as_deref(),
+            self.active_session_id.as_ref().map(|id| id.as_str()),
             self.sidebar_index,
             self.focus == Focus::Sidebar,
         );
@@ -496,10 +497,14 @@ mod tests {
         App::new(PathBuf::from("/tmp/herald-test"), 80, 24)
     }
 
+    fn sid(s: &str) -> SessionId {
+        SessionId(s.to_string())
+    }
+
     fn add_fake_session(app: &mut App, session_id: &str) {
         use crate::session::model::Session;
         let s = Session::new(
-            session_id.to_string(),
+            sid(session_id),
             "test".to_string(),
             "prompt".to_string(),
             PathBuf::from("/tmp"),
@@ -510,7 +515,7 @@ mod tests {
 
     fn make_hook(session_id: &str, name: HookEventName) -> HookEvent {
         HookEvent {
-            session_id: session_id.to_string(),
+            session_id: sid(session_id),
             hook_event_name: name,
             tool_name: Some("Edit".to_string()),
             tool_use_id: Some("t1".to_string()),
@@ -596,7 +601,7 @@ mod tests {
         let event = make_hook("s1", HookEventName::PermissionRequest);
         app.handle_hook_event(event);
 
-        assert_eq!(app.active_session_id, Some("s1".to_string()));
+        assert_eq!(app.active_session_id, Some(sid("s1")));
         assert_eq!(app.focus, Focus::MainArea);
     }
 
@@ -656,10 +661,10 @@ mod tests {
         add_fake_session(&mut app, "s1");
         add_fake_session(&mut app, "s2");
         // Set s1 to running, s2 to needs-attention
-        if let Some(s) = app.session_manager.get_mut("s1") {
+        if let Some(s) = app.session_manager.get_mut(&sid("s1")) {
             s.status = SessionStatus::Running { last_activity: Instant::now() };
         }
-        if let Some(s) = app.session_manager.get_mut("s2") {
+        if let Some(s) = app.session_manager.get_mut(&sid("s2")) {
             s.status = SessionStatus::NeedsAttention {
                 reason: crate::session::model::AttentionReason::PermissionPrompt {
                     tool_name: "Edit".into(),
@@ -668,7 +673,7 @@ mod tests {
                 since: Instant::now(),
             };
         }
-        app.active_session_id = Some("s1".to_string());
+        app.active_session_id = Some(sid("s1"));
         app.focus = Focus::Sidebar;
         let output = render_app(&app);
         insta::assert_snapshot!(output);

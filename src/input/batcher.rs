@@ -1,5 +1,11 @@
 use std::time::{Duration, Instant};
 
+/// A flushed batch of literal keystrokes for a specific tmux pane.
+pub struct PaneBatch {
+    pub pane_id: String,
+    pub text: String,
+}
+
 /// Batches literal keystrokes destined for a tmux pane, flushing them
 /// as a single `send-keys -l` call after a short delay.
 pub struct KeyBatcher {
@@ -20,8 +26,8 @@ impl KeyBatcher {
     }
 
     /// Add a literal character to the batch. If the pane changed, returns
-    /// the old `(pane_id, text)` that should be flushed first.
-    pub fn push_literal(&mut self, pane_id: &str, text: &str) -> Option<(String, String)> {
+    /// the old batch that should be flushed first.
+    pub fn push_literal(&mut self, pane_id: &str, text: &str) -> Option<PaneBatch> {
         let stale = if !self.buffer.is_empty() && self.pane_id != pane_id {
             Some(self.take_batch())
         } else {
@@ -36,8 +42,8 @@ impl KeyBatcher {
         stale
     }
 
-    /// Take the current batch out, returning `(pane_id, text)` or `None`.
-    pub fn take(&mut self) -> Option<(String, String)> {
+    /// Take the current batch out, or `None` if empty.
+    pub fn take(&mut self) -> Option<PaneBatch> {
         if self.buffer.is_empty() {
             None
         } else {
@@ -54,11 +60,11 @@ impl KeyBatcher {
         self.buffer.is_empty()
     }
 
-    fn take_batch(&mut self) -> (String, String) {
-        let pane = std::mem::take(&mut self.pane_id);
-        let buf = std::mem::take(&mut self.buffer);
+    fn take_batch(&mut self) -> PaneBatch {
+        let pane_id = std::mem::take(&mut self.pane_id);
+        let text = std::mem::take(&mut self.buffer);
         self.batch_start = None;
-        (pane, buf)
+        PaneBatch { pane_id, text }
     }
 }
 
@@ -80,9 +86,9 @@ mod tests {
         assert!(b.push_literal("%1", "i").is_none());
         assert!(!b.is_empty());
 
-        let (pane, text) = b.take().unwrap();
-        assert_eq!(pane, "%1");
-        assert_eq!(text, "hi");
+        let batch = b.take().unwrap();
+        assert_eq!(batch.pane_id, "%1");
+        assert_eq!(batch.text, "hi");
         assert!(b.is_empty());
     }
 
@@ -90,14 +96,13 @@ mod tests {
     fn pane_change_flushes_old() {
         let mut b = KeyBatcher::new();
         b.push_literal("%1", "a");
-        let stale = b.push_literal("%2", "b");
-        let (pane, text) = stale.unwrap();
-        assert_eq!(pane, "%1");
-        assert_eq!(text, "a");
+        let stale = b.push_literal("%2", "b").unwrap();
+        assert_eq!(stale.pane_id, "%1");
+        assert_eq!(stale.text, "a");
 
-        let (pane, text) = b.take().unwrap();
-        assert_eq!(pane, "%2");
-        assert_eq!(text, "b");
+        let batch = b.take().unwrap();
+        assert_eq!(batch.pane_id, "%2");
+        assert_eq!(batch.text, "b");
     }
 
     #[test]
