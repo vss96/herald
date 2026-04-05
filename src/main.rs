@@ -1,5 +1,6 @@
 mod app;
 mod events;
+mod input;
 mod session;
 mod tmux;
 mod tui;
