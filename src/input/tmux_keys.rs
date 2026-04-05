@@ -32,14 +32,13 @@ pub fn map_key(key: KeyEvent) -> TmuxKey {
             }
         }
         KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) {
-                TmuxKey::Literal(format!("C-S-{}", c))
-            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
-                TmuxKey::Literal(format!("C-{}", c))
-            } else {
+            let mods = key.modifiers;
+            match (mods.contains(KeyModifiers::CONTROL), mods.contains(KeyModifiers::SHIFT)) {
+                (true, true) => TmuxKey::Literal(format!("C-S-{}", c)),
+                (true, false) => TmuxKey::Literal(format!("C-{}", c)),
                 // Plain char or Shift+char — send the char as-is
                 // (uppercase is already encoded in `c` by crossterm for Shift+char)
-                TmuxKey::Literal(c.to_string())
+                _ => TmuxKey::Literal(c.to_string()),
             }
         }
         _ => TmuxKey::Ignored,

@@ -291,12 +291,10 @@ impl Widget for &NewSessionDialog {
         let footer_y = dialog_area.y + dialog_area.height - 1;
         if footer_y > dialog_area.y {
             let kl = &self.key_labels;
-            let help = if self.active_field == DialogField::WorkingDir {
-                format!(" {}:next  {}:complete path  {}:cancel", kl.submit, kl.next_field, kl.close)
-            } else if self.active_field == DialogField::Prompt {
-                format!(" {}:launch  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close)
-            } else {
-                format!(" {}:next  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close)
+            let help = match self.active_field {
+                DialogField::WorkingDir => format!(" {}:next  {}:complete path  {}:cancel", kl.submit, kl.next_field, kl.close),
+                DialogField::Prompt => format!(" {}:launch  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close),
+                DialogField::Nickname => format!(" {}:next  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close),
             };
             buf.set_string(
                 inner.x,
