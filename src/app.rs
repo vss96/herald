@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
 
-use crate::config::{self, KeyBindings};
+use crate::config::{self, DialogKeys, KeyBindings, SidebarKeys};
 use crate::events::queue::AttentionQueue;
 use crate::events::types::HookEvent;
 use crate::input::batcher::KeyBatcher;
@@ -26,6 +26,55 @@ pub enum Focus {
     Sidebar,
     MainArea,
     Dialog,
+}
+
+/// Resolved sidebar key action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidebarAction {
+    Quit,
+    NewSession,
+    MoveDown,
+    MoveUp,
+    SelectSession,
+    SwitchToMain,
+    Dismiss,
+    KillSession,
+}
+
+fn resolve_sidebar_action(key: &KeyEvent, kb: &SidebarKeys) -> Option<SidebarAction> {
+    let bindings: &[(&[KeyEvent], SidebarAction)] = &[
+        (&kb.force_quit, SidebarAction::Quit),
+        (&kb.quit, SidebarAction::Quit),
+        (&kb.new_session, SidebarAction::NewSession),
+        (&kb.move_down, SidebarAction::MoveDown),
+        (&kb.move_up, SidebarAction::MoveUp),
+        (&kb.select_session, SidebarAction::SelectSession),
+        (&kb.switch_to_main, SidebarAction::SwitchToMain),
+        (&kb.dismiss, SidebarAction::Dismiss),
+        (&kb.kill_session, SidebarAction::KillSession),
+    ];
+    bindings.iter()
+        .find(|(keys, _)| config::key_matches(key, keys))
+        .map(|(_, action)| *action)
+}
+
+/// Resolved dialog key action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialogAction {
+    Close,
+    NextFieldOrComplete,
+    SubmitOrAdvance,
+}
+
+fn resolve_dialog_action(key: &KeyEvent, dk: &DialogKeys) -> Option<DialogAction> {
+    let bindings: &[(&[KeyEvent], DialogAction)] = &[
+        (&dk.close, DialogAction::Close),
+        (&dk.next_field, DialogAction::NextFieldOrComplete),
+        (&dk.submit, DialogAction::SubmitOrAdvance),
+    ];
+    bindings.iter()
+        .find(|(keys, _)| config::key_matches(key, keys))
+        .map(|(_, action)| *action)
 }
 
 /// Central application state.
@@ -134,60 +183,72 @@ impl App {
     }
 
     fn handle_sidebar_key(&mut self, key: KeyEvent) {
-        let kb = &self.keybindings.sidebar;
-        if config::key_matches(&key, &kb.force_quit) || config::key_matches(&key, &kb.quit) {
-            self.should_quit = true;
-        } else if config::key_matches(&key, &kb.new_session) {
-            self.dialog.visible = true;
-            self.dialog.working_dir.set(
-                std::env::current_dir()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-            );
-            self.dialog.key_labels = crate::tui::dialogs::DialogKeyLabels {
-                submit: config::format_key(&self.keybindings.dialog.submit[0]),
-                next_field: config::format_key(&self.keybindings.dialog.next_field[0]),
-                close: config::format_key(&self.keybindings.dialog.close[0]),
-            };
-            self.focus = Focus::Dialog;
-        } else if config::key_matches(&key, &kb.move_down) {
-            let count = self.session_manager.session_count();
-            if count > 0 {
-                self.sidebar_index = (self.sidebar_index + 1) % count;
+        let Some(action) = resolve_sidebar_action(&key, &self.keybindings.sidebar) else {
+            return;
+        };
+        match action {
+            SidebarAction::Quit => {
+                self.should_quit = true;
             }
-        } else if config::key_matches(&key, &kb.move_up) {
-            let count = self.session_manager.session_count();
-            if count > 0 {
-                self.sidebar_index = (self.sidebar_index + count - 1) % count;
+            SidebarAction::NewSession => {
+                self.dialog.visible = true;
+                self.dialog.working_dir.set(
+                    std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                );
+                self.dialog.key_labels = crate::tui::dialogs::DialogKeyLabels {
+                    submit: config::format_key(&self.keybindings.dialog.submit[0]),
+                    next_field: config::format_key(&self.keybindings.dialog.next_field[0]),
+                    close: config::format_key(&self.keybindings.dialog.close[0]),
+                };
+                self.focus = Focus::Dialog;
             }
-        } else if config::key_matches(&key, &kb.select_session) {
-            if let Some(session) = self.session_ids().get(self.sidebar_index) {
-                self.active_session_id = Some(session.clone());
-                self.captured_content = None;
-                self.scroll_offset = 0;
-                self.focus = Focus::MainArea;
+            SidebarAction::MoveDown => {
+                let count = self.session_manager.session_count();
+                if count > 0 {
+                    self.sidebar_index = (self.sidebar_index + 1) % count;
+                }
             }
-        } else if config::key_matches(&key, &kb.switch_to_main) {
-            if self.active_session_id.is_some() {
-                self.focus = Focus::MainArea;
+            SidebarAction::MoveUp => {
+                let count = self.session_manager.session_count();
+                if count > 0 {
+                    self.sidebar_index = (self.sidebar_index + count - 1) % count;
+                }
             }
-        } else if config::key_matches(&key, &kb.dismiss) {
-            if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
-                if self.attention_queue.dismiss_completion(&id) {
-                    if let Some(session) = self.session_manager.get_mut(&id) {
-                        session.status = SessionStatus::Stopped { exit_code: None };
-                    }
-                } else if self.attention_queue.dismiss_error(&id) {
-                    if let Some(session) = self.session_manager.get_mut(&id) {
-                        session.status = SessionStatus::Error {
-                            message: "dismissed".to_string(),
-                        };
+            SidebarAction::SelectSession => {
+                if let Some(session) = self.session_ids().get(self.sidebar_index) {
+                    self.active_session_id = Some(session.clone());
+                    self.captured_content = None;
+                    self.scroll_offset = 0;
+                    self.focus = Focus::MainArea;
+                }
+            }
+            SidebarAction::SwitchToMain => {
+                if self.active_session_id.is_some() {
+                    self.focus = Focus::MainArea;
+                }
+            }
+            SidebarAction::Dismiss => {
+                if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
+                    let new_status = match () {
+                        _ if self.attention_queue.dismiss_completion(&id) => {
+                            Some(SessionStatus::Stopped { exit_code: None })
+                        }
+                        _ if self.attention_queue.dismiss_error(&id) => {
+                            Some(SessionStatus::Error { message: "dismissed".to_string() })
+                        }
+                        _ => None,
+                    };
+                    if let (Some(status), Some(session)) = (new_status, self.session_manager.get_mut(&id)) {
+                        session.status = status;
                     }
                 }
             }
-        } else if config::key_matches(&key, &kb.kill_session) {
-            if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
-                self.pending_kill = Some(id);
+            SidebarAction::KillSession => {
+                if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
+                    self.pending_kill = Some(id);
+                }
             }
         }
     }
@@ -279,21 +340,22 @@ impl App {
     }
 
     async fn handle_dialog_key(&mut self, key: KeyEvent) {
-        let dk = &self.keybindings.dialog;
-        if config::key_matches(&key, &dk.close) {
-            self.dialog.reset();
-            self.focus = Focus::Sidebar;
-        } else if config::key_matches(&key, &dk.next_field) {
-            if self.dialog.active_field == crate::tui::dialogs::DialogField::WorkingDir {
-                self.dialog.complete_directory_path();
-            } else {
-                self.dialog.next_field();
+        match resolve_dialog_action(&key, &self.keybindings.dialog) {
+            Some(DialogAction::Close) => {
+                self.dialog.reset();
+                self.focus = Focus::Sidebar;
             }
-        } else if config::key_matches(&key, &dk.submit) {
-            if self.dialog.active_field == crate::tui::dialogs::DialogField::Prompt
-                && self.dialog.is_valid()
-            {
-                    // Submit on last field when valid
+            Some(DialogAction::NextFieldOrComplete) => {
+                if self.dialog.active_field == crate::tui::dialogs::DialogField::WorkingDir {
+                    self.dialog.complete_directory_path();
+                } else {
+                    self.dialog.next_field();
+                }
+            }
+            Some(DialogAction::SubmitOrAdvance) => {
+                if self.dialog.active_field == crate::tui::dialogs::DialogField::Prompt
+                    && self.dialog.is_valid()
+                {
                     let nickname = self.dialog.nickname.text.clone();
                     let prompt = self.dialog.prompt.text.clone();
                     let working_dir = PathBuf::from(&self.dialog.working_dir.text);
@@ -309,7 +371,6 @@ impl App {
                     match self.session_manager.launch(&nickname, &prompt, &working_dir).await {
                         Ok(id) => {
                             tracing::info!(session_id = %id, "session launched");
-                            // Spawn a hook listener for this new session
                             if let Some(ref tx) = self.event_tx {
                                 crate::spawn_hook_listener(
                                     &self.runtime_dir,
@@ -324,20 +385,22 @@ impl App {
                             tracing::error!("failed to launch session: {}", e);
                         }
                     }
-            } else {
-                self.dialog.next_field();
+                } else {
+                    self.dialog.next_field();
+                }
             }
-        } else {
-            // Standard text editing keys (not configurable)
-            match key.code {
-                KeyCode::Backspace => self.dialog.active_input().backspace(),
-                KeyCode::Delete => self.dialog.active_input().delete(),
-                KeyCode::Left => self.dialog.active_input().move_left(),
-                KeyCode::Right => self.dialog.active_input().move_right(),
-                KeyCode::Home => self.dialog.active_input().home(),
-                KeyCode::End => self.dialog.active_input().end(),
-                KeyCode::Char(c) => self.dialog.active_input().insert(c),
-                _ => {}
+            None => {
+                // Standard text editing keys (not configurable)
+                match key.code {
+                    KeyCode::Backspace => self.dialog.active_input().backspace(),
+                    KeyCode::Delete => self.dialog.active_input().delete(),
+                    KeyCode::Left => self.dialog.active_input().move_left(),
+                    KeyCode::Right => self.dialog.active_input().move_right(),
+                    KeyCode::Home => self.dialog.active_input().home(),
+                    KeyCode::End => self.dialog.active_input().end(),
+                    KeyCode::Char(c) => self.dialog.active_input().insert(c),
+                    _ => {}
+                }
             }
         }
     }
