@@ -67,8 +67,8 @@ impl Session {
             SessionStatus::Starting => "starting",
             SessionStatus::Running { .. } => "running",
             SessionStatus::NeedsAttention { reason, .. } => match reason {
-                AttentionReason::PermissionPrompt { .. } => "PERMISSION",
-                AttentionReason::ToolError { .. } => "ERROR",
+                AttentionReason::PermissionPrompt { .. } => "needs input",
+                AttentionReason::ToolError { .. } => "error",
                 AttentionReason::Completed => "done",
             },
             SessionStatus::Stopped { .. } => "stopped",
@@ -132,7 +132,7 @@ mod tests {
             },
             since: Instant::now(),
         };
-        assert_eq!(s.status_label(), "PERMISSION");
+        assert_eq!(s.status_label(), "needs input");
 
         s.status = SessionStatus::NeedsAttention {
             reason: AttentionReason::ToolError {
@@ -141,7 +141,7 @@ mod tests {
             },
             since: Instant::now(),
         };
-        assert_eq!(s.status_label(), "ERROR");
+        assert_eq!(s.status_label(), "error");
 
         s.status = SessionStatus::NeedsAttention {
             reason: AttentionReason::Completed,
