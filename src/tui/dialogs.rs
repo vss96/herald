@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -128,6 +130,49 @@ impl NewSessionDialog {
     pub fn is_valid(&self) -> bool {
         !self.nickname.text.trim().is_empty() && !self.prompt.text.trim().is_empty()
     }
+
+    /// Tab-complete directory paths (like a terminal).
+    pub fn complete_directory_path(&mut self) {
+        let input_text = self.working_dir.text.clone();
+        let path = PathBuf::from(&input_text);
+
+        let (search_dir, prefix) = if input_text.ends_with('/') || input_text.ends_with(std::path::MAIN_SEPARATOR) {
+            (path.clone(), String::new())
+        } else {
+            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("/"));
+            let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            (parent.to_path_buf(), file_name)
+        };
+
+        let Ok(entries) = std::fs::read_dir(&search_dir) else {
+            return;
+        };
+
+        let mut matches: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map_or(false, |ft| ft.is_dir()))
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') && !prefix.starts_with('.') {
+                    return false;
+                }
+                name.starts_with(&prefix)
+            })
+            .map(|e| e.path())
+            .collect();
+
+        matches.sort();
+
+        if matches.len() == 1 {
+            let completed = format!("{}/", matches[0].display());
+            self.working_dir.set(completed);
+        } else if matches.len() > 1 {
+            let names: Vec<String> = matches.iter().map(|p| p.display().to_string()).collect();
+            if let Some(common) = longest_common_prefix(&names) {
+                self.working_dir.set(common);
+            }
+        }
+    }
 }
 
 impl Widget for &NewSessionDialog {
@@ -222,6 +267,29 @@ impl Widget for &NewSessionDialog {
     }
 }
 
+/// Find the longest common prefix among a list of strings.
+fn longest_common_prefix(strings: &[String]) -> Option<String> {
+    if strings.is_empty() {
+        return None;
+    }
+    let first = &strings[0];
+    let mut prefix_len = first.len();
+    for s in &strings[1..] {
+        prefix_len = prefix_len.min(s.len());
+        for (i, (a, b)) in first.bytes().zip(s.bytes()).enumerate() {
+            if a != b {
+                prefix_len = prefix_len.min(i);
+                break;
+            }
+        }
+    }
+    if prefix_len == 0 {
+        None
+    } else {
+        Some(first[..prefix_len].to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +368,33 @@ mod tests {
         assert!(d.prompt.text.is_empty());
         assert!(!d.visible);
         assert_eq!(d.active_field, DialogField::Nickname);
+    }
+
+    #[test]
+    fn longest_common_prefix_single_string() {
+        let strings = vec!["/usr/local".to_string()];
+        assert_eq!(longest_common_prefix(&strings), Some("/usr/local".to_string()));
+    }
+
+    #[test]
+    fn longest_common_prefix_multiple_with_common() {
+        let strings = vec![
+            "/usr/local/bin".to_string(),
+            "/usr/local/lib".to_string(),
+            "/usr/local/share".to_string(),
+        ];
+        assert_eq!(longest_common_prefix(&strings), Some("/usr/local/".to_string()));
+    }
+
+    #[test]
+    fn longest_common_prefix_empty_input() {
+        let strings: Vec<String> = vec![];
+        assert_eq!(longest_common_prefix(&strings), None);
+    }
+
+    #[test]
+    fn longest_common_prefix_no_common_prefix() {
+        let strings = vec!["alpha".to_string(), "beta".to_string()];
+        assert_eq!(longest_common_prefix(&strings), None);
     }
 }

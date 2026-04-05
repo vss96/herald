@@ -215,7 +215,7 @@ impl App {
             KeyCode::Tab => {
                 // Tab on directory field: path completion
                 if self.dialog.active_field == crate::tui::dialogs::DialogField::WorkingDir {
-                    self.complete_directory_path();
+                    self.dialog.complete_directory_path();
                 } else {
                     self.dialog.next_field();
                 }
@@ -282,52 +282,6 @@ impl App {
                 self.dialog.active_input().insert(c);
             }
             _ => {}
-        }
-    }
-
-    /// Tab-complete directory paths (like a terminal).
-    fn complete_directory_path(&mut self) {
-        let input_text = self.dialog.working_dir.text.clone();
-        let path = PathBuf::from(&input_text);
-
-        let (search_dir, prefix) = if input_text.ends_with('/') || input_text.ends_with(std::path::MAIN_SEPARATOR) {
-            (path.clone(), String::new())
-        } else {
-            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("/"));
-            let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            (parent.to_path_buf(), file_name)
-        };
-
-        let Ok(entries) = std::fs::read_dir(&search_dir) else {
-            return;
-        };
-
-        let mut matches: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map_or(false, |ft| ft.is_dir()))
-            .filter(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                if name.starts_with('.') && !prefix.starts_with('.') {
-                    return false;
-                }
-                name.starts_with(&prefix)
-            })
-            .map(|e| e.path())
-            .collect();
-
-        matches.sort();
-
-        if matches.len() == 1 {
-            let completed = format!("{}/", matches[0].display());
-            self.dialog.working_dir.set(completed);
-        } else if matches.len() > 1 {
-            let names: Vec<String> = matches
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect();
-            if let Some(common) = longest_common_prefix(&names) {
-                self.dialog.working_dir.set(common);
-            }
         }
     }
 
@@ -499,29 +453,6 @@ impl App {
             focus_label, self.session_manager.session_count(), attention_count,
         );
         Widget::render(status_bar, status_area, buf);
-    }
-}
-
-/// Find the longest common prefix among a list of strings.
-fn longest_common_prefix(strings: &[String]) -> Option<String> {
-    if strings.is_empty() {
-        return None;
-    }
-    let first = &strings[0];
-    let mut prefix_len = first.len();
-    for s in &strings[1..] {
-        prefix_len = prefix_len.min(s.len());
-        for (i, (a, b)) in first.bytes().zip(s.bytes()).enumerate() {
-            if a != b {
-                prefix_len = prefix_len.min(i);
-                break;
-            }
-        }
-    }
-    if prefix_len == 0 {
-        None
-    } else {
-        Some(first[..prefix_len].to_string())
     }
 }
 
