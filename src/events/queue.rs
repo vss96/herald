@@ -67,19 +67,28 @@ impl AttentionQueue {
     fn process_event_at(&mut self, event: &HookEvent, now: Instant) -> bool {
         let priority = event.hook_event_name.priority();
 
-        // PostToolUse resolves pending permission prompts
+        // PostToolUse resolves pending permission prompts; if the entry is
+        // not a permission (e.g. Completed/ToolError), activity clears it
         if event.hook_event_name == HookEventName::PostToolUse {
-            return self.try_resolve_permission(&event.session_id, event.tool_use_id.as_deref());
-        }
-
-        // Non-queueable events don't enter the queue
-        if !event.hook_event_name.is_queueable() {
-            // But non-error events from a session can clear an error entry
-            if let Some(existing) = self.entries.get(&event.session_id) {
-                if matches!(existing.reason, AttentionReason::ToolError { .. }) {
+            if self.try_resolve_permission(&event.session_id, event.tool_use_id.as_deref()) {
+                return true;
+            }
+            // Only clear non-permission entries — a mismatched tool_use_id means
+            // the permission prompt is still pending for a different tool
+            if let Some(entry) = self.entries.get(&event.session_id) {
+                if !matches!(entry.reason, AttentionReason::PermissionPrompt { .. }) {
                     self.entries.remove(&event.session_id);
                     return true;
                 }
+            }
+            return false;
+        }
+
+        // Non-queueable events don't enter the queue, but activity from a session
+        // clears any pending attention entry (the session is no longer waiting)
+        if !event.hook_event_name.is_queueable() {
+            if self.entries.remove(&event.session_id).is_some() {
+                return true;
             }
             return false;
         }
@@ -228,6 +237,11 @@ impl AttentionQueue {
     pub fn get(&self, session_id: &SessionId) -> Option<&QueueEntry> {
         self.entries.get(session_id)
     }
+
+    /// Remove any entry for a session, regardless of reason.
+    pub fn remove(&mut self, session_id: &SessionId) -> bool {
+        self.entries.remove(session_id).is_some()
+    }
 }
 
 #[cfg(test)]
@@ -355,6 +369,71 @@ mod tests {
         let notif = make_event("s1", HookEventName::Notification, None);
         assert!(q.process_event(&notif));
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn notification_clears_completed_entry() {
+        let mut q = AttentionQueue::new();
+        let stop = make_event("s1", HookEventName::Stop, None);
+        q.process_event(&stop);
+        assert_eq!(q.len(), 1);
+
+        // A Notification from the same session should clear the Completed entry
+        let notif = make_event("s1", HookEventName::Notification, None);
+        assert!(q.process_event(&notif));
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn pre_tool_use_clears_completed_entry() {
+        let mut q = AttentionQueue::new();
+        let stop = make_event("s1", HookEventName::Stop, None);
+        q.process_event(&stop);
+        assert_eq!(q.len(), 1);
+
+        // A PreToolUse from the same session should clear the Completed entry
+        let pre = make_event("s1", HookEventName::PreToolUse, None);
+        assert!(q.process_event(&pre));
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn notification_clears_permission_entry() {
+        let mut q = AttentionQueue::new();
+        let perm = make_event("s1", HookEventName::PermissionRequest, Some("t1"));
+        q.process_event(&perm);
+        assert_eq!(q.len(), 1);
+
+        // A Notification from the same session should clear the PermissionPrompt entry
+        let notif = make_event("s1", HookEventName::Notification, None);
+        assert!(q.process_event(&notif));
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn remove_clears_any_entry_type() {
+        let mut q = AttentionQueue::new();
+
+        // Test with Completed
+        let stop = make_event("s1", HookEventName::Stop, None);
+        q.process_event(&stop);
+        assert!(q.remove(&sid("s1")));
+        assert!(q.is_empty());
+
+        // Test with PermissionPrompt
+        let perm = make_event("s2", HookEventName::PermissionRequest, Some("t1"));
+        q.process_event(&perm);
+        assert!(q.remove(&sid("s2")));
+        assert!(q.is_empty());
+
+        // Test with ToolError
+        let error = make_event("s3", HookEventName::PostToolUseFailure, None);
+        q.process_event(&error);
+        assert!(q.remove(&sid("s3")));
+        assert!(q.is_empty());
+
+        // Remove on non-existent session returns false
+        assert!(!q.remove(&sid("s99")));
     }
 
     // ── Dismiss actions ──
