@@ -4,8 +4,6 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
 
@@ -494,37 +492,13 @@ impl App {
             Focus::MainArea => "TERMINAL",
             Focus::Dialog => "NEW SESSION",
         };
-        // Only count attention entries for sessions that actually exist
-        let queue_count = self
-            .attention_queue
-            .entries_sorted()
-            .iter()
+        let attention_count = self.attention_queue.entries_sorted().iter()
             .filter(|e| self.session_manager.get(&e.session_id).is_some())
             .count();
-        let bg = Color::Rgb(30, 30, 46); // dark purple-gray
-        let status_line = Line::from(vec![
-            Span::styled(" herald ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {} ", focus_label), Style::default().fg(Color::Cyan).bg(bg)),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(bg)),
-            Span::styled(
-                format!("{} sessions", self.session_manager.session_count()),
-                Style::default().fg(Color::White).bg(bg),
-            ),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(bg)),
-            if queue_count > 0 {
-                Span::styled(
-                    format!("{} need attention", queue_count),
-                    Style::default().fg(Color::Red).bg(bg).add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::styled("all clear", Style::default().fg(Color::Green).bg(bg))
-            },
-            Span::styled(" | ", Style::default().fg(Color::DarkGray).bg(bg)),
-            Span::styled("q:quit n:new x:kill C-g:sidebar", Style::default().fg(Color::DarkGray).bg(bg)),
-        ]);
-        // Fill the rest of the status bar with background
-        buf.set_style(status_area, Style::default().bg(bg));
-        buf.set_line(status_area.x, status_area.y, &status_line, status_area.width);
+        let status_bar = crate::tui::status_bar::StatusBar::new(
+            focus_label, self.session_manager.session_count(), attention_count,
+        );
+        Widget::render(status_bar, status_area, buf);
     }
 }
 
