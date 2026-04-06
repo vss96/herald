@@ -173,7 +173,7 @@ fn session_style(status: &SessionStatus) -> (&'static str, Color) {
             AttentionReason::PermissionPrompt { .. } => ("●", RED),
             AttentionReason::Completed => ("✓", GREEN),
         },
-        SessionStatus::Stopped { .. } => ("✓", GREEN),
+        SessionStatus::Stopped => ("✓", GREEN),
         SessionStatus::Error { .. } => ("✗", RED),
     }
 }
@@ -208,7 +208,7 @@ mod tests {
             tool_name: "Edit".into(),
             tool_use_id: None,
         });
-        let s4 = make_test_session("s4", "stopped", SessionStatus::Stopped { exit_code: Some(0) });
+        let s4 = make_test_session("s4", "stopped", SessionStatus::Stopped);
         let s5 = make_test_session("s5", "errored", SessionStatus::Error {
             message: "crash".into(),
         });

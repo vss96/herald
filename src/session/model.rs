@@ -52,7 +52,7 @@ pub enum SessionStatus {
     Starting,
     Running { last_activity: Instant },
     NeedsAttention { reason: AttentionReason, since: Instant },
-    Stopped { exit_code: Option<i32> },
+    Stopped,
     Error { message: String },
 }
 
@@ -109,7 +109,7 @@ impl Session {
                 AttentionReason::ToolError { .. } => "error",
                 AttentionReason::Completed => "done",
             },
-            SessionStatus::Stopped { .. } => "stopped",
+            SessionStatus::Stopped => "stopped",
             SessionStatus::Error { .. } => "error",
         }
     }
@@ -120,7 +120,7 @@ impl Session {
     pub fn is_alive(&self) -> bool {
         !matches!(
             self.status,
-            SessionStatus::Stopped { .. } | SessionStatus::Error { .. }
+            SessionStatus::Stopped | SessionStatus::Error { .. }
         )
     }
 }
@@ -149,7 +149,7 @@ mod tests {
             "fix tests".into(),
             PathBuf::from("/tmp"),
         );
-        s.status = SessionStatus::Stopped { exit_code: Some(0) };
+        s.status = SessionStatus::Stopped;
         assert!(!s.is_alive());
     }
 

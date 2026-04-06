@@ -13,8 +13,8 @@ use crate::events::types::HookEvent;
 use crate::input::batcher::KeyBatcher;
 use crate::input::tmux_keys::{self, TmuxKey};
 use crate::session::manager::SessionManager;
-use crate::session::model::SessionStatus;
 use crate::session::model::SessionId;
+use crate::session::state_machine::{self, SessionEvent};
 use crate::tui::dialogs::NewSessionDialog;
 use crate::tui::layout;
 use crate::tui::main_area::MainArea;
@@ -150,12 +150,16 @@ impl App {
         );
         let changed = self.attention_queue.process_event(&event);
 
-        // Update session status based on event
+        // Update session status via state machine
+        let session_event = SessionEvent::Hook {
+            name: event.hook_event_name.clone(),
+            tool_name: event.tool_name.clone(),
+            tool_use_id: event.tool_use_id.clone(),
+        };
         if let Some(session) = self.session_manager.get_mut(&session_id) {
-            if let Some(new_status) = crate::events::status_mapper::next_status(
+            if let Some(new_status) = state_machine::transition(
                 &session.status,
-                &event.hook_event_name,
-                event.tool_name.as_deref(),
+                &session_event,
             ) {
                 session.status = new_status;
             }
@@ -231,18 +235,16 @@ impl App {
             }
             SidebarAction::Dismiss => {
                 if let Some(id) = self.session_ids().get(self.sidebar_index).cloned() {
-                    let new_status = match () {
-                        _ if self.attention_queue.dismiss_completion(&id) => {
-                            Some(SessionStatus::Stopped { exit_code: None })
+                    if let Some(session) = self.session_manager.get_mut(&id) {
+                        if let Some(new_status) = state_machine::transition(
+                            &session.status,
+                            &SessionEvent::UserDismiss,
+                        ) {
+                            session.status = new_status;
                         }
-                        _ if self.attention_queue.dismiss_error(&id) => {
-                            Some(SessionStatus::Error { message: "dismissed".to_string() })
-                        }
-                        _ => None,
-                    };
-                    if let (Some(status), Some(session)) = (new_status, self.session_manager.get_mut(&id)) {
-                        session.status = status;
                     }
+                    self.attention_queue.dismiss_completion(&id);
+                    self.attention_queue.dismiss_error(&id);
                 }
             }
             SidebarAction::KillSession => {
@@ -411,6 +413,15 @@ impl App {
             return;
         };
         tracing::info!(session_id = %id, "killing session");
+        // Transition state before killing tmux pane
+        if let Some(session) = self.session_manager.get_mut(&id) {
+            if let Some(new_status) = state_machine::transition(
+                &session.status,
+                &SessionEvent::UserKill,
+            ) {
+                session.status = new_status;
+            }
+        }
         if let Err(e) = self.session_manager.kill(&id).await {
             tracing::error!(session_id = %id, "failed to kill session: {}", e);
         }
