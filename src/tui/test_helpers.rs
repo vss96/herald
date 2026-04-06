@@ -51,6 +51,7 @@ pub fn make_test_session(id: &str, nickname: &str, status: SessionStatus) -> Ses
         nickname.to_string(),
         "test prompt".to_string(),
         PathBuf::from("/tmp"),
+        "claude-code".to_string(),
     );
     s.status = status;
     s

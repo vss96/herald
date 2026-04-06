@@ -6,13 +6,15 @@ expression: output
 
 
 
-
-
           ┌ New Session ─────────────────────────────────────────────┐
           │ Nickname:                                                │
           │  sess                                                    │
+          │ Provider:                                                │
+          │    Claude Code                                           │
           │ Directory:                                               │
           │                                                          │
+          │ Worktree:                                                │
+          │  [ ] isolate in git worktree                             │
           │ Prompt:                                                  │
           │  set of characters it overflows all the way to the right │
           │                                                          │

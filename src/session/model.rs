@@ -46,7 +46,7 @@ impl PaneId {
     }
 }
 
-/// Status of a Claude Code session.
+/// Status of an AI coding session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionStatus {
     Starting,
@@ -70,13 +70,15 @@ pub enum AttentionReason {
     Completed,
 }
 
-/// A managed Claude Code session.
+/// A managed AI coding session.
 pub struct Session {
     pub id: SessionId,
     pub nickname: String,
     pub tmux_pane_id: PaneId,
     pub prompt: String,
     pub working_dir: PathBuf,
+    pub provider_id: String,
+    pub worktree_path: Option<PathBuf>,
     pub status: SessionStatus,
     pub created_at: Instant,
 }
@@ -87,6 +89,7 @@ impl Session {
         nickname: String,
         prompt: String,
         working_dir: PathBuf,
+        provider_id: String,
     ) -> Self {
         Self {
             id,
@@ -94,6 +97,8 @@ impl Session {
             tmux_pane_id: PaneId(String::new()),
             prompt,
             working_dir,
+            provider_id,
+            worktree_path: None,
             status: SessionStatus::Starting,
             created_at: Instant::now(),
         }
@@ -136,6 +141,7 @@ mod tests {
             "test".into(),
             "fix tests".into(),
             PathBuf::from("/tmp"),
+            "claude-code".into(),
         );
         assert!(matches!(s.status, SessionStatus::Starting));
         assert!(s.is_alive());
@@ -148,6 +154,7 @@ mod tests {
             "test".into(),
             "fix tests".into(),
             PathBuf::from("/tmp"),
+            "claude-code".into(),
         );
         s.status = SessionStatus::Stopped;
         assert!(!s.is_alive());
@@ -160,6 +167,7 @@ mod tests {
             "test".into(),
             "prompt".into(),
             PathBuf::from("/tmp"),
+            "claude-code".into(),
         );
         assert_eq!(s.status_label(), "starting");
 
