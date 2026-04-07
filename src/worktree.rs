@@ -179,6 +179,19 @@ mod tests {
             .output()
             .await
             .unwrap();
+        // Configure identity for CI environments where global git config is absent
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo)
+            .output()
+            .await
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo)
+            .output()
+            .await
+            .unwrap();
         Command::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(&repo)
