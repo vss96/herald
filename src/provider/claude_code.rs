@@ -94,17 +94,7 @@ fn write_hook_config(ctx: &HookSetupContext) -> Result<()> {
     if let Some(hooks) = config["hooks"].as_object_mut() {
         for event_name in MANAGED_EVENTS {
             if let Some(arr) = hooks.get_mut(*event_name).and_then(|v| v.as_array_mut()) {
-                arr.retain(|entry| {
-                    !entry["hooks"]
-                        .as_array()
-                        .is_some_and(|h| {
-                            h.iter().any(|hook| {
-                                hook["command"]
-                                    .as_str()
-                                    .is_some_and(|cmd| cmd.contains("herald-hook.py"))
-                            })
-                        })
-                });
+                arr.retain(|entry| !is_herald_managed_entry(entry));
             }
         }
     }
@@ -141,17 +131,7 @@ fn remove_hook_config(working_dir: &Path) -> Result<()> {
     if let Some(hooks) = config.get_mut("hooks").and_then(|h| h.as_object_mut()) {
         for event_name in MANAGED_EVENTS {
             if let Some(arr) = hooks.get_mut(*event_name).and_then(|v| v.as_array_mut()) {
-                arr.retain(|entry| {
-                    !entry["hooks"]
-                        .as_array()
-                        .is_some_and(|h| {
-                            h.iter().any(|hook| {
-                                hook["command"]
-                                    .as_str()
-                                    .is_some_and(|cmd| cmd.contains("herald-hook.py"))
-                            })
-                        })
-                });
+                arr.retain(|entry| !is_herald_managed_entry(entry));
             }
         }
     }
@@ -160,6 +140,21 @@ fn remove_hook_config(working_dir: &Path) -> Result<()> {
         .context("writing cleaned hook config")?;
 
     Ok(())
+}
+
+/// True if this hook entry was authored by Herald.
+///
+/// Matches on `HERALD_SOCKET=` — present in every Herald-written command
+/// regardless of whether it invokes `herald-hook.py` or the bash fallback
+/// `herald-hook.sh`, and unlikely to collide with user-authored hooks.
+fn is_herald_managed_entry(entry: &serde_json::Value) -> bool {
+    entry["hooks"].as_array().is_some_and(|hooks| {
+        hooks.iter().any(|hook| {
+            hook["command"]
+                .as_str()
+                .is_some_and(|cmd| cmd.contains("HERALD_SOCKET="))
+        })
+    })
 }
 
 #[cfg(test)]
@@ -302,6 +297,52 @@ mod tests {
 
         let perm_hooks = parsed["hooks"]["PermissionRequest"].as_array().unwrap();
         assert!(perm_hooks.is_empty());
+    }
+
+    #[test]
+    fn cleanup_removes_bash_fallback_hooks() {
+        // Mirrors the observed failure in claude-ext: settings.local.json ended up
+        // with one `.py`-form Herald entry and one `.sh`-form Herald entry from a
+        // prior build. Before the HERALD_SOCKET= filter, the `.sh` entry survived
+        // cleanup because the retain predicate only matched `herald-hook.py`.
+        let working_dir = tempfile::tempdir().unwrap();
+        let claude_dir = working_dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        let mixed = serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [
+                    {
+                        "matcher": "",
+                        "hooks": [{
+                            "type": "command",
+                            "command": "CLAUDE_SESSION_ID=sess-sh HERALD_SOCKET=/tmp/herald/sess-sh.sock bash /tmp/herald/herald-hook.sh"
+                        }]
+                    },
+                    {
+                        "matcher": "",
+                        "hooks": [{
+                            "type": "command",
+                            "command": "CLAUDE_SESSION_ID=sess-py HERALD_SOCKET=/tmp/herald/sess-py.sock python3 /tmp/herald/herald-hook.py"
+                        }]
+                    }
+                ]
+            }
+        });
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            serde_json::to_string_pretty(&mixed).unwrap(),
+        )
+        .unwrap();
+
+        remove_hook_config(working_dir.path()).unwrap();
+
+        let content =
+            std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        let ups = parsed["hooks"]["UserPromptSubmit"].as_array().unwrap();
+        assert!(ups.is_empty(), "both .py and .sh herald entries should be pruned, got {:?}", ups);
     }
 
     #[test]
