@@ -86,18 +86,19 @@ impl SessionManager {
         // Use worktree path as the effective working directory if available
         let effective_dir = worktree_path.as_deref().unwrap_or(working_dir);
 
-        let pane_id_str = commands::new_window(TMUX_SESSION_NAME, nickname).await?;
-        let pane_id = PaneId(pane_id_str);
-        commands::set_pane_option(pane_id.as_str(), PANE_METADATA_KEY, session_id.as_str()).await?;
-
-        // Install provider hooks via spawn_blocking (blocking filesystem I/O)
+        // Install hooks BEFORE creating the tmux pane. Running in the opposite
+        // order meant a hook-install failure (bad permissions, malformed
+        // settings.local.json, etc.) left the tmux pane orphaned with no
+        // session record to clean it up on kill(). Install first; if that
+        // fails, roll back the worktree and return — no pane to leak.
         let rt_dir = self.runtime_dir.clone();
         let wd = effective_dir.to_path_buf();
         let sid_clone = session_id.clone();
         let provider_id_owned = provider_id.to_string();
         let registry = self.registry.clone();
-        tokio::task::spawn_blocking(move || {
-            let provider = registry.get_by_id(&provider_id_owned)
+        let install_result = tokio::task::spawn_blocking(move || {
+            let provider = registry
+                .get_by_id(&provider_id_owned)
                 .expect("provider disappeared from registry");
             let ctx = HookSetupContext {
                 session_id: &sid_clone,
@@ -107,7 +108,49 @@ impl SessionManager {
             };
             provider.install_hooks(&ctx)
         })
-        .await??;
+        .await?;
+
+        if let Err(e) = install_result {
+            rollback_worktree(&worktree_path, &repo_path).await;
+            return Err(e);
+        }
+
+        // Create pane. If this fails, roll back hooks + worktree so a bad
+        // tmux state doesn't leave stale Herald entries in settings.local.json.
+        let pane_id = match commands::new_window(TMUX_SESSION_NAME, nickname).await {
+            Ok(pid) => PaneId(pid),
+            Err(e) => {
+                rollback_hooks(
+                    &self.registry,
+                    provider_id,
+                    &session_id,
+                    effective_dir,
+                    &self.runtime_dir,
+                )
+                .await;
+                rollback_worktree(&worktree_path, &repo_path).await;
+                return Err(e);
+            }
+        };
+        if let Err(e) = commands::set_pane_option(
+            pane_id.as_str(),
+            PANE_METADATA_KEY,
+            session_id.as_str(),
+        )
+        .await
+        {
+            let _ = commands::kill_pane(pane_id.as_str()).await;
+            rollback_hooks(
+                &self.registry,
+                provider_id,
+                &session_id,
+                effective_dir,
+                &self.runtime_dir,
+            )
+            .await;
+            rollback_worktree(&worktree_path, &repo_path).await;
+            return Err(e);
+        }
 
         // Generate and send launch command
         let launch_cmd = provider.launch_command(effective_dir, prompt)?;
@@ -279,4 +322,43 @@ impl SessionManager {
 
         Ok(discovered)
     }
+}
+
+/// Remove a partially-installed worktree during launch failure. Best-effort —
+/// we log but do not propagate any removal error since the caller is about
+/// to return the original failure anyway.
+async fn rollback_worktree(worktree_path: &Option<PathBuf>, repo_path: &Option<PathBuf>) {
+    if let (Some(wt), Some(repo)) = (worktree_path, repo_path) {
+        if let Err(e) = crate::worktree::WorktreeManager::remove(repo, wt).await {
+            tracing::warn!("failed to roll back worktree after launch failure: {}", e);
+        }
+    }
+}
+
+/// Roll back provider hooks that were installed for a session whose pane
+/// creation failed. Best-effort — same rationale as `rollback_worktree`.
+async fn rollback_hooks(
+    registry: &Arc<ProviderRegistry>,
+    provider_id: &str,
+    session_id: &SessionId,
+    effective_dir: &Path,
+    runtime_dir: &Path,
+) {
+    let registry = registry.clone();
+    let provider_id = provider_id.to_string();
+    let sid = session_id.clone();
+    let wd = effective_dir.to_path_buf();
+    let rt_dir = runtime_dir.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Some(provider) = registry.get_by_id(&provider_id) {
+            let ctx = HookSetupContext {
+                session_id: &sid,
+                working_dir: &wd,
+                socket_path: rt_dir.join(format!("{}.sock", sid)),
+                hook_script_path: rt_dir.join("herald-hook.py"),
+            };
+            let _ = provider.cleanup_hooks(&ctx);
+        }
+    })
+    .await;
 }
