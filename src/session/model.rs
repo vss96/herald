@@ -79,6 +79,12 @@ pub struct Session {
     pub working_dir: PathBuf,
     pub provider_id: String,
     pub worktree_path: Option<PathBuf>,
+    /// Canonical git toplevel of `working_dir`. Populated when a worktree was
+    /// created so that cleanup on kill can call WorktreeManager::remove with
+    /// an explicit repo path, rather than inferring from the worktree's
+    /// parent chain (which no longer points at the source repo under the
+    /// central `<data>/herald/worktrees/` layout).
+    pub repo_path: Option<PathBuf>,
     pub status: SessionStatus,
     pub created_at: Instant,
 }
@@ -99,6 +105,7 @@ impl Session {
             working_dir,
             provider_id,
             worktree_path: None,
+            repo_path: None,
             status: SessionStatus::Starting,
             created_at: Instant::now(),
         }

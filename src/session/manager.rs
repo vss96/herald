@@ -53,20 +53,34 @@ impl SessionManager {
 
         let session_id = SessionId(uuid::Uuid::new_v4().to_string());
 
-        // Create worktree if requested (before hook install so hooks target the worktree dir)
-        let worktree_path = if use_worktree {
-            match crate::worktree::WorktreeManager::create(working_dir, nickname, &session_id).await {
-                Ok(path) => {
-                    tracing::info!(worktree = %path.display(), "created worktree for session");
-                    Some(path)
-                }
+        // Create worktree if requested (before hook install so hooks target the worktree dir).
+        // Also resolve the canonical repo root so kill() can later call
+        // WorktreeManager::remove with an explicit repo path — the central
+        // <data>/herald/worktrees/ layout means the worktree's parent chain
+        // no longer identifies the source repo.
+        let (worktree_path, repo_path) = if use_worktree {
+            match crate::worktree::git_toplevel(working_dir).await {
+                Ok(root) => match crate::worktree::WorktreeManager::create(
+                    &root, nickname, &session_id,
+                )
+                .await
+                {
+                    Ok(path) => {
+                        tracing::info!(worktree = %path.display(), "created worktree for session");
+                        (Some(path), Some(root))
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to create worktree, proceeding without: {}", e);
+                        (None, None)
+                    }
+                },
                 Err(e) => {
-                    tracing::warn!("failed to create worktree, proceeding without: {}", e);
-                    None
+                    tracing::warn!("working dir is not in a git repo, skipping worktree: {}", e);
+                    (None, None)
                 }
             }
         } else {
-            None
+            (None, None)
         };
 
         // Use worktree path as the effective working directory if available
@@ -123,6 +137,7 @@ impl SessionManager {
         );
         session.tmux_pane_id = pane_id;
         session.worktree_path = worktree_path;
+        session.repo_path = repo_path;
 
         self.sessions.insert(session_id.clone(), session);
         Ok(session_id)
@@ -168,8 +183,8 @@ impl SessionManager {
             // Clean up worktree if session had one. Awaited (not detached) so
             // that a user quitting Herald right after kill() doesn't cancel
             // the removal task and leave the worktree behind.
-            if let Some(wt_path) = &session.worktree_path {
-                if let Err(e) = crate::worktree::WorktreeManager::remove(wt_path).await {
+            if let (Some(wt_path), Some(repo)) = (&session.worktree_path, &session.repo_path) {
+                if let Err(e) = crate::worktree::WorktreeManager::remove(repo, wt_path).await {
                     tracing::warn!("failed to clean up worktree: {}", e);
                 }
             }
