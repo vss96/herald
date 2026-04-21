@@ -5,34 +5,52 @@ use tokio::process::Command;
 
 use crate::session::model::SessionId;
 
-/// Directory within a repo root where Herald stores its worktrees.
-const WORKTREE_DIR: &str = ".herald-worktrees";
-
 /// Manages git worktree lifecycle for session isolation.
+///
+/// Worktrees are stored outside the source repo at
+/// `<data-dir>/herald/worktrees/<repo-basename>/<sanitized-name>-<short-uuid>/`
+/// so the source repo stays clean and no `.gitignore` entries are needed.
+/// The caller passes both `repo_path` (the git repository root) and
+/// `worktree_path` explicitly to `remove`/`cleanup_orphaned` — we never
+/// infer one from the other.
 pub struct WorktreeManager;
 
 impl WorktreeManager {
     /// Create a git worktree for a session.
     ///
-    /// Location: `<repo-root>/.herald-worktrees/<nickname>-<short-uuid>/`
-    /// Branch:   `herald/<nickname>-<short-uuid>`
+    /// `repo_path` must be either the git repository root or any path inside
+    /// the repo; we resolve to the canonical toplevel before deriving the
+    /// basename used in the worktree's storage path.
+    ///
+    /// Branch: `herald/<sanitized-nickname>-<short-uuid>`.
+    /// Worktree: `<herald_worktrees_root>/<repo-basename>/<sanitized-nickname>-<short-uuid>/`.
     ///
     /// Returns the absolute path to the new worktree directory.
     pub async fn create(
-        repo_dir: &Path,
+        repo_path: &Path,
         nickname: &str,
         session_id: &SessionId,
     ) -> Result<PathBuf> {
+        let repo_root = git_toplevel(repo_path).await?;
         let short_id = &session_id.as_str()[..8.min(session_id.as_str().len())];
         let name = format!("{}-{}", sanitize_name(nickname), short_id);
         let branch = format!("herald/{}", name);
-        let worktree_path = repo_dir.join(WORKTREE_DIR).join(&name);
+
+        let worktree_path = herald_worktrees_root()?
+            .join(repo_basename(&repo_root)?)
+            .join(&name);
+
+        if let Some(parent) = worktree_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .context("creating worktree parent directory")?;
+        }
 
         let output = Command::new("git")
             .args(["worktree", "add", "-b", &branch])
             .arg(&worktree_path)
             .arg("HEAD")
-            .current_dir(repo_dir)
+            .current_dir(&repo_root)
             .output()
             .await
             .context("running git worktree add")?;
@@ -46,22 +64,19 @@ impl WorktreeManager {
     }
 
     /// Remove a git worktree and its associated branch. Best-effort.
-    pub async fn remove(worktree_path: &Path) -> Result<()> {
-        // Extract repo root from the worktree path
-        // Worktree is at <repo>/.herald-worktrees/<name>, so repo is 2 levels up
-        let repo_dir = worktree_path
-            .parent()
-            .and_then(|p| p.parent())
-            .context("cannot determine repo root from worktree path")?;
+    ///
+    /// Both `repo_path` and `worktree_path` must be supplied — we do not
+    /// infer the repo from the worktree's parent chain.
+    pub async fn remove(repo_path: &Path, worktree_path: &Path) -> Result<()> {
+        let branch_name = worktree_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|name| format!("herald/{}", name));
 
-        // Try to extract the branch name from .git file in the worktree
-        let branch_name = read_worktree_branch(worktree_path).await;
-
-        // Remove the worktree
         let output = Command::new("git")
             .args(["worktree", "remove", "--force"])
             .arg(worktree_path)
-            .current_dir(repo_dir)
+            .current_dir(repo_path)
             .output()
             .await
             .context("running git worktree remove")?;
@@ -69,21 +84,18 @@ impl WorktreeManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             tracing::warn!("git worktree remove failed: {}", stderr.trim());
-            // Fall back to manual cleanup
             let _ = tokio::fs::remove_dir_all(worktree_path).await;
-            // Prune stale worktree entries
             let _ = Command::new("git")
                 .args(["worktree", "prune"])
-                .current_dir(repo_dir)
+                .current_dir(repo_path)
                 .output()
                 .await;
         }
 
-        // Delete the herald branch (best-effort)
         if let Some(branch) = branch_name {
             let _ = Command::new("git")
                 .args(["branch", "-D", &branch])
-                .current_dir(repo_dir)
+                .current_dir(repo_path)
                 .output()
                 .await;
         }
@@ -119,20 +131,22 @@ impl WorktreeManager {
             .unwrap_or(false)
     }
 
-    /// Clean up orphaned Herald worktrees not matching any active session.
+    /// Clean up orphaned Herald worktrees under the repo's storage dir that
+    /// don't match any active session.
     #[cfg(test)]
     pub async fn cleanup_orphaned(
-        repo_dir: &Path,
+        repo_path: &Path,
         active_ids: &[SessionId],
     ) -> Result<()> {
-        let worktree_dir = repo_dir.join(WORKTREE_DIR);
+        let repo_root = git_toplevel(repo_path).await?;
+        let worktree_dir = herald_worktrees_root()?.join(repo_basename(&repo_root)?);
         if !worktree_dir.exists() {
             return Ok(());
         }
 
         let mut entries = tokio::fs::read_dir(&worktree_dir)
             .await
-            .context("reading .herald-worktrees")?;
+            .context("reading herald worktrees dir")?;
 
         while let Some(entry) = entries.next_entry().await? {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -143,7 +157,7 @@ impl WorktreeManager {
 
             if !is_active {
                 tracing::info!(worktree = %name, "cleaning up orphaned worktree");
-                let _ = Self::remove(&entry.path()).await;
+                let _ = Self::remove(&repo_root, &entry.path()).await;
             }
         }
 
@@ -151,18 +165,55 @@ impl WorktreeManager {
     }
 }
 
+/// Resolve any path inside a git repo to the canonical repository root via
+/// `git rev-parse --show-toplevel`.
+pub async fn git_toplevel(dir: &Path) -> Result<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .await
+        .context("running git rev-parse --show-toplevel")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "not a git repository ({}): {}",
+            dir.display(),
+            stderr.trim()
+        );
+    }
+
+    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path_str.is_empty() {
+        anyhow::bail!("git rev-parse returned empty path for {}", dir.display());
+    }
+    Ok(PathBuf::from(path_str))
+}
+
+/// Root directory where Herald stores all worktrees across repos.
+/// Matches the data-dir convention used for logs (`dirs::data_dir()/herald/...`).
+fn herald_worktrees_root() -> Result<PathBuf> {
+    let base = dirs::data_dir()
+        .context("no platform data directory available")?;
+    Ok(base.join("herald").join("worktrees"))
+}
+
+/// Extract the basename of a repo path for use as a storage subdirectory,
+/// stripping a trailing `.git` if present (matches Orca's convention).
+fn repo_basename(repo_path: &Path) -> Result<String> {
+    let base = repo_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .context("repo path has no basename")?;
+    Ok(base.trim_end_matches(".git").to_string())
+}
+
 /// Sanitize a nickname for use in branch/directory names.
 fn sanitize_name(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect()
-}
-
-/// Try to read the branch name from a worktree's .git file.
-async fn read_worktree_branch(worktree_path: &Path) -> Option<String> {
-    // The worktree name follows herald/ convention
-    let name = worktree_path.file_name()?.to_string_lossy();
-    Some(format!("herald/{}", name))
 }
 
 #[cfg(test)]
@@ -181,7 +232,6 @@ mod tests {
             .output()
             .await
             .unwrap();
-        // Configure identity for CI environments where global git config is absent
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(&repo)
@@ -204,17 +254,74 @@ mod tests {
         (dir, repo)
     }
 
+    /// Serialize tests that mutate the global env vars read by
+    /// `dirs::data_dir()` — otherwise one test's `set_var` races with
+    /// another's reads and they observe each other's data dirs.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Override the data dir for tests and hold a lock for the test's
+    /// duration. Tests must bind the returned guard: `let _env = ...`.
+    fn override_data_dir(tmp: &Path) -> std::sync::MutexGuard<'static, ()> {
+        let guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        #[cfg(target_os = "macos")]
+        {
+            std::env::set_var("HOME", tmp);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            std::env::set_var("XDG_DATA_HOME", tmp);
+        }
+        guard
+    }
+
     #[tokio::test]
-    async fn create_and_remove_worktree() {
+    async fn create_places_worktree_outside_repo() {
         let (_dir, repo) = make_test_repo().await;
+        let data_home = tempfile::tempdir().unwrap();
+        let _env = override_data_dir(data_home.path());
+
         let session_id = SessionId("abcdef12-3456-7890-abcd-ef1234567890".into());
+        let wt = WorktreeManager::create(&repo, "test-session", &session_id)
+            .await
+            .unwrap();
 
-        let wt = WorktreeManager::create(&repo, "test-session", &session_id).await.unwrap();
         assert!(wt.exists());
-        assert!(wt.join(".git").exists()); // worktree has a .git file
+        assert!(wt.join(".git").exists());
+        // Critical: worktree must NOT be inside the source repo.
+        assert!(!wt.starts_with(&repo));
+        // And it must live under <data>/herald/worktrees/<repo-basename>/
+        let worktrees_root = herald_worktrees_root().unwrap();
+        assert!(wt.starts_with(&worktrees_root));
 
-        WorktreeManager::remove(&wt).await.unwrap();
+        WorktreeManager::remove(&repo, &wt).await.unwrap();
         assert!(!wt.exists());
+    }
+
+    #[tokio::test]
+    async fn create_accepts_subdirectory_of_repo() {
+        // Regression guard: if a user launches Herald from a subdir,
+        // create() must resolve to the repo root, not treat the subdir as root.
+        let (_dir, repo) = make_test_repo().await;
+        let data_home = tempfile::tempdir().unwrap();
+        let _env = override_data_dir(data_home.path());
+
+        let subdir = repo.join("src");
+        tokio::fs::create_dir_all(&subdir).await.unwrap();
+
+        let session_id = SessionId("subdir01-3456-7890-abcd-ef1234567890".into());
+        let wt = WorktreeManager::create(&subdir, "from-subdir", &session_id)
+            .await
+            .unwrap();
+
+        // Storage basename should match the repo root, not the subdir.
+        let repo_basename_str = repo.file_name().unwrap().to_string_lossy().to_string();
+        assert!(wt
+            .to_string_lossy()
+            .contains(&format!("worktrees/{}/", repo_basename_str)));
+
+        WorktreeManager::remove(&repo, &wt).await.unwrap();
     }
 
     #[tokio::test]
@@ -237,6 +344,9 @@ mod tests {
     #[tokio::test]
     async fn cleanup_orphaned_removes_stale_worktrees() {
         let (_dir, repo) = make_test_repo().await;
+        let data_home = tempfile::tempdir().unwrap();
+        let _env = override_data_dir(data_home.path());
+
         let sid1 = SessionId("aaaaaaaa-1111-2222-3333-444444444444".into());
         let sid2 = SessionId("bbbbbbbb-1111-2222-3333-444444444444".into());
 
@@ -245,13 +355,13 @@ mod tests {
         assert!(wt1.exists());
         assert!(wt2.exists());
 
-        // Only sid1 is active — sid2 should be cleaned up
-        WorktreeManager::cleanup_orphaned(&repo, &[sid1.clone()]).await.unwrap();
+        WorktreeManager::cleanup_orphaned(&repo, &[sid1.clone()])
+            .await
+            .unwrap();
         assert!(wt1.exists());
         assert!(!wt2.exists());
 
-        // Clean up
-        WorktreeManager::remove(&wt1).await.unwrap();
+        WorktreeManager::remove(&repo, &wt1).await.unwrap();
     }
 
     #[tokio::test]
@@ -259,5 +369,38 @@ mod tests {
         assert_eq!(sanitize_name("my session!"), "my-session-");
         assert_eq!(sanitize_name("fix/tests"), "fix-tests");
         assert_eq!(sanitize_name("good-name_1"), "good-name_1");
+    }
+
+    #[tokio::test]
+    async fn repo_basename_strips_dot_git() {
+        assert_eq!(
+            repo_basename(Path::new("/some/where/herald")).unwrap(),
+            "herald"
+        );
+        assert_eq!(
+            repo_basename(Path::new("/some/where/herald.git")).unwrap(),
+            "herald"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_toplevel_resolves_from_subdirectory() {
+        let (_dir, repo) = make_test_repo().await;
+        let subdir = repo.join("deep").join("nested");
+        tokio::fs::create_dir_all(&subdir).await.unwrap();
+
+        let resolved = git_toplevel(&subdir).await.unwrap();
+        // git rev-parse may canonicalize symlinks (macOS /var → /private/var),
+        // so compare via canonicalize on both sides.
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            repo.canonicalize().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn git_toplevel_fails_outside_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(git_toplevel(dir.path()).await.is_err());
     }
 }
