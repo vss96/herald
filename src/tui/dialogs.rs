@@ -348,6 +348,11 @@ fn render_text_field(
         let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
         let field_width = (inner.x + inner.width).saturating_sub(input_x + 1) as usize;
 
+        if field_width == 0 {
+            *row += 2;
+            return;
+        }
+
         if active {
             let (before, at, after) = input.parts();
             let before_chars: Vec<char> = before.chars().collect();
