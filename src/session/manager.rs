@@ -131,9 +131,16 @@ impl SessionManager {
     /// Kill a session by ID.
     pub async fn kill(&mut self, session_id: &SessionId) -> Result<()> {
         if let Some(session) = self.sessions.get(session_id) {
-            // Clean up provider hooks (best-effort)
+            // Clean up provider hooks (best-effort). Use the same directory hooks
+            // were installed into: the worktree path if the session has one, else
+            // the original working dir. Using session.working_dir here would leave
+            // worktree hooks behind.
             let rt_dir = self.runtime_dir.clone();
-            let wd = session.working_dir.clone();
+            let wd = session
+                .worktree_path
+                .as_deref()
+                .unwrap_or(&session.working_dir)
+                .to_path_buf();
             let sid = session_id.clone();
             let provider_id = session.provider_id.clone();
             let registry = self.registry.clone();
@@ -158,14 +165,13 @@ impl SessionManager {
                 let _ = tokio::fs::remove_file(rt_dir.join(format!("{}.{}", &sid, ext))).await;
             }
 
-            // Clean up worktree if session had one
+            // Clean up worktree if session had one. Awaited (not detached) so
+            // that a user quitting Herald right after kill() doesn't cancel
+            // the removal task and leave the worktree behind.
             if let Some(wt_path) = &session.worktree_path {
-                let wt = wt_path.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = crate::worktree::WorktreeManager::remove(&wt).await {
-                        tracing::warn!("failed to clean up worktree: {}", e);
-                    }
-                });
+                if let Err(e) = crate::worktree::WorktreeManager::remove(wt_path).await {
+                    tracing::warn!("failed to clean up worktree: {}", e);
+                }
             }
         }
         self.sessions.remove(session_id);
