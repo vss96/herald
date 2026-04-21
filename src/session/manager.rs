@@ -11,6 +11,9 @@ use crate::tmux::commands;
 
 const TMUX_SESSION_NAME: &str = "herald";
 const PANE_METADATA_KEY: &str = "@herald_session_id";
+const PANE_PROVIDER_KEY: &str = "@herald_provider_id";
+const PANE_WORKDIR_KEY: &str = "@herald_working_dir";
+const PANE_WORKTREE_KEY: &str = "@herald_worktree_path";
 const SESSION_FILE_EXTENSIONS: &[&str] = &["sock", "buffer", "prompt", "lock"];
 
 /// Manages the lifecycle of AI coding sessions.
@@ -132,24 +135,43 @@ impl SessionManager {
                 return Err(e);
             }
         };
-        if let Err(e) = commands::set_pane_option(
-            pane_id.as_str(),
-            PANE_METADATA_KEY,
-            session_id.as_str(),
-        )
-        .await
-        {
-            let _ = commands::kill_pane(pane_id.as_str()).await;
-            rollback_hooks(
-                &self.registry,
-                provider_id,
-                &session_id,
-                effective_dir,
-                &self.runtime_dir,
-            )
-            .await;
-            rollback_worktree(&worktree_path, &repo_path).await;
-            return Err(e);
+        // Persist all state discover_existing needs to faithfully reconstruct
+        // the Session on restart: session id (used to match a pane to Herald),
+        // provider id (so kill() routes cleanup through the right provider),
+        // working dir (so hook cleanup targets the right .claude dir), and
+        // worktree path (so kill() can remove the worktree git created).
+        // Without these, a discovered session lost its provider (hardcoded to
+        // "claude-code") and working dir (empty) so cleanup targeted the
+        // wrong thing.
+        let pane_options: &[(&str, &str)] = &[
+            (PANE_METADATA_KEY, session_id.as_str()),
+            (PANE_PROVIDER_KEY, provider_id),
+            (
+                PANE_WORKDIR_KEY,
+                working_dir.to_str().unwrap_or(""),
+            ),
+            (
+                PANE_WORKTREE_KEY,
+                worktree_path
+                    .as_deref()
+                    .and_then(Path::to_str)
+                    .unwrap_or(""),
+            ),
+        ];
+        for (key, value) in pane_options {
+            if let Err(e) = commands::set_pane_option(pane_id.as_str(), key, value).await {
+                let _ = commands::kill_pane(pane_id.as_str()).await;
+                rollback_hooks(
+                    &self.registry,
+                    provider_id,
+                    &session_id,
+                    effective_dir,
+                    &self.runtime_dir,
+                )
+                .await;
+                rollback_worktree(&worktree_path, &repo_path).await;
+                return Err(e);
+            }
         }
 
         // Generate and send launch command
@@ -282,42 +304,82 @@ impl SessionManager {
     }
 
     /// Discover existing sessions from a previous TUI instance.
+    ///
+    /// Reads the provider id, working directory, and worktree path from tmux
+    /// pane options (written at launch time), so cleanup on kill() targets
+    /// the right provider and directories. Without these, a discovered
+    /// session would fall back to a hardcoded "claude-code" provider and
+    /// an empty working_dir, sending cleanup at the wrong place.
     pub async fn discover_existing(&mut self) -> Result<Vec<SessionId>> {
         if !commands::has_session(TMUX_SESSION_NAME).await? {
             return Ok(vec![]);
         }
 
-        // Use tab delimiter — safe even if nickname contains spaces.
-        // Include pane_current_command to filter out herald's own panes.
-        let format = "#{pane_id}\t#{window_name}\t#{@herald_session_id}\t#{pane_current_command}";
+        // Tab delimiter is safe even when a nickname contains spaces; a
+        // working_dir containing a literal tab would break parsing, but
+        // tabs in filesystem paths are extraordinarily rare.
+        let format = "#{pane_id}\t#{window_name}\t#{@herald_session_id}\t#{@herald_provider_id}\t#{@herald_working_dir}\t#{@herald_worktree_path}\t#{pane_current_command}";
         let panes = commands::list_panes(TMUX_SESSION_NAME, format).await?;
 
         let mut discovered = Vec::new();
         for line in panes {
-            let parts: Vec<&str> = line.splitn(4, '\t').collect();
-            if parts.len() >= 4 && !parts[2].is_empty() {
-                let pane_id = PaneId(parts[0].to_string());
-                let nickname = parts[1].to_string();
-                let session_id = SessionId(parts[2].to_string());
-                let command = parts[3];
-
-                // Skip panes running herald itself (the default shell from new-session)
-                if command == TMUX_SESSION_NAME {
-                    tracing::info!(pane_id = %pane_id, "skipping herald's own pane");
-                    continue;
-                }
-
-                let mut session = Session::new(
-                    session_id.clone(),
-                    nickname,
-                    String::new(),
-                    PathBuf::new(),
-                    "claude-code".to_string(),
-                );
-                session.tmux_pane_id = pane_id;
-                self.sessions.insert(session_id.clone(), session);
-                discovered.push(session_id);
+            let parts: Vec<&str> = line.splitn(7, '\t').collect();
+            if parts.len() < 7 || parts[2].is_empty() {
+                continue;
             }
+            let pane_id = PaneId(parts[0].to_string());
+            let nickname = parts[1].to_string();
+            let session_id = SessionId(parts[2].to_string());
+            let provider_id = parts[3];
+            let working_dir_raw = parts[4];
+            let worktree_raw = parts[5];
+            let command = parts[6];
+
+            if command == TMUX_SESSION_NAME {
+                tracing::info!(pane_id = %pane_id, "skipping herald's own pane");
+                continue;
+            }
+
+            // Legacy panes launched before these keys existed will report
+            // empty strings; fall back to the old hardcoded defaults so
+            // pre-existing sessions still discover, just without clean
+            // worktree-removal support.
+            let provider_id = if provider_id.is_empty() {
+                "claude-code"
+            } else {
+                provider_id
+            };
+            let working_dir = if working_dir_raw.is_empty() {
+                PathBuf::new()
+            } else {
+                PathBuf::from(working_dir_raw)
+            };
+            let worktree_path = if worktree_raw.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(worktree_raw))
+            };
+            // Repo path is re-resolved from working_dir rather than stored
+            // as a fourth pane option — one source of truth, and it
+            // matches what launch() would have derived anyway.
+            let repo_path = if worktree_path.is_some() && !working_dir.as_os_str().is_empty() {
+                crate::worktree::git_toplevel(&working_dir).await.ok()
+            } else {
+                None
+            };
+
+            let mut session = Session::new(
+                session_id.clone(),
+                nickname,
+                String::new(),
+                working_dir,
+                provider_id.to_string(),
+            );
+            session.tmux_pane_id = pane_id;
+            session.worktree_path = worktree_path;
+            session.repo_path = repo_path;
+            self.sessions.insert(session_id.clone(), session);
+            discovered.push(session_id);
         }
 
         Ok(discovered)
