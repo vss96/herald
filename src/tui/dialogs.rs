@@ -90,6 +90,10 @@ pub struct NewSessionDialog {
     pub nickname: TextInput,
     pub prompt: TextInput,
     pub working_dir: TextInput,
+    pub provider_index: usize,
+    pub provider_names: Vec<String>,
+    pub use_worktree: bool,
+    pub worktree_available: bool,
     pub active_field: DialogField,
     pub visible: bool,
     /// Formatted key labels for the footer (e.g., "Enter", "Tab", "Esc").
@@ -118,7 +122,9 @@ impl Default for DialogKeyLabels {
 pub enum DialogField {
     #[default]
     Nickname,
+    Provider,
     WorkingDir,
+    Worktree,
     Prompt,
 }
 
@@ -127,28 +133,73 @@ impl NewSessionDialog {
         self.nickname.clear();
         self.prompt.clear();
         self.working_dir.clear();
+        self.provider_index = 0;
+        self.use_worktree = false;
         self.active_field = DialogField::Nickname;
         self.visible = false;
     }
 
     pub fn next_field(&mut self) {
         self.active_field = match self.active_field {
-            DialogField::Nickname => DialogField::WorkingDir,
-            DialogField::WorkingDir => DialogField::Prompt,
+            DialogField::Nickname => DialogField::Provider,
+            DialogField::Provider => DialogField::WorkingDir,
+            DialogField::WorkingDir => {
+                if self.worktree_available {
+                    DialogField::Worktree
+                } else {
+                    DialogField::Prompt
+                }
+            }
+            DialogField::Worktree => DialogField::Prompt,
             DialogField::Prompt => DialogField::Nickname,
         };
     }
 
-    pub fn active_input(&mut self) -> &mut TextInput {
+    /// Returns the active text input, or None for non-text fields (Provider, Worktree).
+    pub fn active_input(&mut self) -> Option<&mut TextInput> {
         match self.active_field {
-            DialogField::Nickname => &mut self.nickname,
-            DialogField::WorkingDir => &mut self.working_dir,
-            DialogField::Prompt => &mut self.prompt,
+            DialogField::Nickname => Some(&mut self.nickname),
+            DialogField::WorkingDir => Some(&mut self.working_dir),
+            DialogField::Prompt => Some(&mut self.prompt),
+            DialogField::Provider | DialogField::Worktree => None,
         }
     }
 
     pub fn is_valid(&self) -> bool {
         !self.nickname.text.trim().is_empty() && !self.prompt.text.trim().is_empty()
+    }
+
+    /// Cycle provider selection forward.
+    pub fn next_provider(&mut self) {
+        if !self.provider_names.is_empty() {
+            self.provider_index = (self.provider_index + 1) % self.provider_names.len();
+        }
+    }
+
+    /// Cycle provider selection backward.
+    pub fn prev_provider(&mut self) {
+        if !self.provider_names.is_empty() {
+            self.provider_index = if self.provider_index == 0 {
+                self.provider_names.len() - 1
+            } else {
+                self.provider_index - 1
+            };
+        }
+    }
+
+    /// Toggle worktree checkbox.
+    pub fn toggle_worktree(&mut self) {
+        if self.worktree_available {
+            self.use_worktree = !self.use_worktree;
+        }
+    }
+
+    /// The currently selected provider name.
+    pub fn selected_provider_name(&self) -> &str {
+        self.provider_names
+            .get(self.provider_index)
+            .map(|s| s.as_str())
+            .unwrap_or("(none)")
     }
 
     /// Tab-complete directory paths (like a terminal).
@@ -199,7 +250,7 @@ impl Widget for &NewSessionDialog {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Center the dialog
         let dialog_width = 60u16.min(area.width.saturating_sub(4));
-        let dialog_height = 11u16;
+        let dialog_height = 15u16;
         let x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
         let y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
         let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
@@ -222,79 +273,39 @@ impl Widget for &NewSessionDialog {
         let inner = block.inner(dialog_area);
         Widget::render(block, dialog_area, buf);
 
-        let fields: Vec<(&str, &TextInput, bool)> = vec![
-            ("Nickname", &self.nickname, self.active_field == DialogField::Nickname),
-            ("Directory", &self.working_dir, self.active_field == DialogField::WorkingDir),
-            ("Prompt", &self.prompt, self.active_field == DialogField::Prompt),
-        ];
+        let mut row = inner.y;
 
-        for (i, (label, input, active)) in fields.iter().enumerate() {
-            let y = inner.y + (i as u16) * 2;
-            if y >= inner.y + inner.height {
-                break;
-            }
+        // --- Nickname field ---
+        render_text_field(buf, &inner, &mut row, "Nickname", &self.nickname,
+            self.active_field == DialogField::Nickname);
 
-            let label_style = if *active {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            buf.set_string(inner.x, y, format!(" {}:", label), label_style);
+        // --- Provider field ---
+        render_selector_field(buf, &inner, &mut row, "Provider", self.selected_provider_name(),
+            self.active_field == DialogField::Provider);
 
-            let input_x = inner.x + 1;
-            let input_y = y + 1;
-            if input_y < inner.y + inner.height {
-                let val_style = if *active {
-                    Style::default().fg(Color::White)
-                } else {
-                    Style::default().fg(Color::Gray)
-                };
-                let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+        // --- Directory field ---
+        render_text_field(buf, &inner, &mut row, "Directory", &self.working_dir,
+            self.active_field == DialogField::WorkingDir);
 
-                // Available character slots for text (after the leading space)
-                let field_width = (inner.x + inner.width).saturating_sub(input_x + 1) as usize;
+        // --- Worktree field ---
+        render_checkbox_field(buf, &inner, &mut row, "Worktree", "isolate in git worktree",
+            self.use_worktree, self.worktree_available,
+            self.active_field == DialogField::Worktree);
 
-                if *active {
-                    let (before, at, after) = input.parts();
-                    let before_chars: Vec<char> = before.chars().collect();
-                    let cursor_pos = before_chars.len();
-
-                    // Scroll so the cursor stays visible
-                    let scroll = if cursor_pos >= field_width {
-                        cursor_pos - field_width + 1
-                    } else {
-                        0
-                    };
-
-                    let visible_before: String = before_chars[scroll..cursor_pos].iter().collect();
-                    let visible_before_width = visible_before.chars().count();
-
-                    buf.set_string(input_x, input_y, format!(" {}", &visible_before), val_style);
-                    let cursor_x = input_x + 1 + visible_before_width as u16;
-                    let cursor_ch = at.unwrap_or(' ');
-                    buf.set_string(cursor_x, input_y, cursor_ch.to_string(), cursor_style);
-
-                    if let Some(_c) = at {
-                        let after_x = cursor_x + 1;
-                        let remaining = field_width.saturating_sub(visible_before_width + 1);
-                        let visible_after: String = after.chars().take(remaining).collect();
-                        buf.set_string(after_x, input_y, &visible_after, val_style);
-                    }
-                } else {
-                    let visible: String = input.text.chars().take(field_width).collect();
-                    buf.set_string(input_x, input_y, format!(" {}", &visible), val_style);
-                }
-            }
-        }
+        // --- Prompt field ---
+        render_text_field(buf, &inner, &mut row, "Prompt", &self.prompt,
+            self.active_field == DialogField::Prompt);
 
         // Footer — context-sensitive help
         let footer_y = dialog_area.y + dialog_area.height - 1;
         if footer_y > dialog_area.y {
             let kl = &self.key_labels;
             let help = match self.active_field {
-                DialogField::WorkingDir => format!(" {}:next  {}:complete path  {}:cancel", kl.submit, kl.next_field, kl.close),
-                DialogField::Prompt => format!(" {}:launch  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close),
                 DialogField::Nickname => format!(" {}:next  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close),
+                DialogField::Provider => format!(" Left/Right:change  {}:next field  {}:cancel", kl.next_field, kl.close),
+                DialogField::WorkingDir => format!(" {}:next  {}:complete path  {}:cancel", kl.submit, kl.next_field, kl.close),
+                DialogField::Worktree => format!(" Space:toggle  {}:next field  {}:cancel", kl.next_field, kl.close),
+                DialogField::Prompt => format!(" {}:launch  {}:next field  {}:cancel", kl.submit, kl.next_field, kl.close),
             };
             buf.set_string(
                 inner.x,
@@ -304,6 +315,151 @@ impl Widget for &NewSessionDialog {
             );
         }
     }
+}
+
+/// Render a text input field with label and cursor.
+fn render_text_field(
+    buf: &mut Buffer,
+    inner: &Rect,
+    row: &mut u16,
+    label: &str,
+    input: &TextInput,
+    active: bool,
+) {
+    if *row >= inner.y + inner.height {
+        return;
+    }
+
+    let label_style = if active {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    buf.set_string(inner.x, *row, format!(" {}:", label), label_style);
+
+    let input_y = *row + 1;
+    if input_y < inner.y + inner.height {
+        let input_x = inner.x + 1;
+        let val_style = if active {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+        let field_width = (inner.x + inner.width).saturating_sub(input_x + 1) as usize;
+
+        if active {
+            let (before, at, after) = input.parts();
+            let before_chars: Vec<char> = before.chars().collect();
+            let cursor_pos = before_chars.len();
+
+            let scroll = if cursor_pos >= field_width {
+                cursor_pos - field_width + 1
+            } else {
+                0
+            };
+
+            let visible_before: String = before_chars[scroll..cursor_pos].iter().collect();
+            let visible_before_width = visible_before.chars().count();
+
+            buf.set_string(input_x, input_y, format!(" {}", &visible_before), val_style);
+            let cursor_x = input_x + 1 + visible_before_width as u16;
+            let cursor_ch = at.unwrap_or(' ');
+            buf.set_string(cursor_x, input_y, cursor_ch.to_string(), cursor_style);
+
+            if at.is_some() {
+                let after_x = cursor_x + 1;
+                let remaining = field_width.saturating_sub(visible_before_width + 1);
+                let visible_after: String = after.chars().take(remaining).collect();
+                buf.set_string(after_x, input_y, &visible_after, val_style);
+            }
+        } else {
+            let visible: String = input.text.chars().take(field_width).collect();
+            buf.set_string(input_x, input_y, format!(" {}", &visible), val_style);
+        }
+    }
+
+    *row += 2;
+}
+
+/// Render a selector field (cycle with Left/Right).
+fn render_selector_field(
+    buf: &mut Buffer,
+    inner: &Rect,
+    row: &mut u16,
+    label: &str,
+    value: &str,
+    active: bool,
+) {
+    if *row >= inner.y + inner.height {
+        return;
+    }
+
+    let label_style = if active {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    buf.set_string(inner.x, *row, format!(" {}:", label), label_style);
+
+    let value_y = *row + 1;
+    if value_y < inner.y + inner.height {
+        let val_style = if active {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let display = if active {
+            format!(" < {} >", value)
+        } else {
+            format!("   {}  ", value)
+        };
+        buf.set_string(inner.x + 1, value_y, &display, val_style);
+    }
+
+    *row += 2;
+}
+
+/// Render a checkbox field (toggle with Space).
+#[allow(clippy::too_many_arguments)]
+fn render_checkbox_field(
+    buf: &mut Buffer,
+    inner: &Rect,
+    row: &mut u16,
+    label: &str,
+    description: &str,
+    checked: bool,
+    available: bool,
+    active: bool,
+) {
+    if *row >= inner.y + inner.height {
+        return;
+    }
+
+    let label_style = if !available {
+        Style::default().fg(Color::DarkGray)
+    } else if active {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    buf.set_string(inner.x, *row, format!(" {}:", label), label_style);
+
+    let value_y = *row + 1;
+    if value_y < inner.y + inner.height {
+        let val_style = if !available {
+            Style::default().fg(Color::DarkGray)
+        } else if active {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let check = if checked { "x" } else { " " };
+        let display = format!(" [{}] {}", check, description);
+        buf.set_string(inner.x + 1, value_y, &display, val_style);
+    }
+
+    *row += 2;
 }
 
 /// Find the longest common prefix among a list of strings.
@@ -375,13 +531,64 @@ mod tests {
     #[test]
     fn dialog_field_cycling() {
         let mut d = NewSessionDialog::default();
+        d.worktree_available = true;
         assert_eq!(d.active_field, DialogField::Nickname);
         d.next_field();
+        assert_eq!(d.active_field, DialogField::Provider);
+        d.next_field();
         assert_eq!(d.active_field, DialogField::WorkingDir);
+        d.next_field();
+        assert_eq!(d.active_field, DialogField::Worktree);
         d.next_field();
         assert_eq!(d.active_field, DialogField::Prompt);
         d.next_field();
         assert_eq!(d.active_field, DialogField::Nickname);
+    }
+
+    #[test]
+    fn dialog_field_cycling_skips_worktree_when_unavailable() {
+        let mut d = NewSessionDialog::default();
+        d.worktree_available = false;
+        d.active_field = DialogField::WorkingDir;
+        d.next_field();
+        assert_eq!(d.active_field, DialogField::Prompt);
+    }
+
+    #[test]
+    fn provider_cycling() {
+        let mut d = NewSessionDialog::default();
+        d.provider_names = vec!["Claude Code".into(), "Codex".into()];
+        assert_eq!(d.provider_index, 0);
+        assert_eq!(d.selected_provider_name(), "Claude Code");
+
+        d.next_provider();
+        assert_eq!(d.provider_index, 1);
+        assert_eq!(d.selected_provider_name(), "Codex");
+
+        d.next_provider();
+        assert_eq!(d.provider_index, 0); // wraps around
+
+        d.prev_provider();
+        assert_eq!(d.provider_index, 1); // wraps backward
+    }
+
+    #[test]
+    fn worktree_toggle() {
+        let mut d = NewSessionDialog::default();
+        d.worktree_available = true;
+        assert!(!d.use_worktree);
+        d.toggle_worktree();
+        assert!(d.use_worktree);
+        d.toggle_worktree();
+        assert!(!d.use_worktree);
+    }
+
+    #[test]
+    fn worktree_toggle_disabled_when_unavailable() {
+        let mut d = NewSessionDialog::default();
+        d.worktree_available = false;
+        d.toggle_worktree();
+        assert!(!d.use_worktree);
     }
 
     #[test]
@@ -400,6 +607,8 @@ mod tests {
         d.nickname.set("test".into());
         d.prompt.set("prompt".into());
         d.working_dir.set("/tmp".into());
+        d.provider_index = 1;
+        d.use_worktree = true;
         d.active_field = DialogField::Prompt;
         d.visible = true;
         d.reset();
@@ -407,6 +616,19 @@ mod tests {
         assert!(d.prompt.text.is_empty());
         assert!(!d.visible);
         assert_eq!(d.active_field, DialogField::Nickname);
+        assert_eq!(d.provider_index, 0);
+        assert!(!d.use_worktree);
+    }
+
+    #[test]
+    fn active_input_returns_none_for_non_text_fields() {
+        let mut d = NewSessionDialog::default();
+        d.active_field = DialogField::Provider;
+        assert!(d.active_input().is_none());
+        d.active_field = DialogField::Worktree;
+        assert!(d.active_input().is_none());
+        d.active_field = DialogField::Nickname;
+        assert!(d.active_input().is_some());
     }
 
     #[test]
@@ -445,6 +667,7 @@ mod tests {
 
         let mut dialog = NewSessionDialog::default();
         dialog.visible = true;
+        dialog.provider_names = vec!["Claude Code".into()];
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
         Widget::render(&dialog, area, &mut buf);
@@ -460,6 +683,8 @@ mod tests {
 
         let mut dialog = NewSessionDialog::default();
         dialog.visible = true;
+        dialog.provider_names = vec!["Claude Code".into(), "Codex".into()];
+        dialog.worktree_available = true;
         dialog.nickname.set("my-session".into());
         dialog.working_dir.set("/home/user/project".into());
         dialog.prompt.set("fix the tests".into());
@@ -479,6 +704,7 @@ mod tests {
 
         let mut dialog = NewSessionDialog::default();
         dialog.visible = true;
+        dialog.provider_names = vec!["Claude Code".into()];
         dialog.nickname.set("sess".into());
         dialog.prompt.set(
             "if the text is more than a certain set of characters it overflows all the way to the right"

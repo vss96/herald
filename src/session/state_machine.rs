@@ -6,7 +6,7 @@ use crate::session::model::{AttentionReason, SessionStatus};
 /// All events that can trigger a session state transition.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
-    /// A hook event from Claude Code.
+    /// A hook event from a provider.
     Hook {
         name: HookEventName,
         tool_name: Option<String>,
@@ -31,7 +31,7 @@ pub fn transition(current: &SessionStatus, event: &SessionEvent) -> Option<Sessi
     }
 }
 
-/// Transitions triggered by hook events from Claude Code.
+/// Transitions triggered by hook events from a provider.
 fn hook_transition(
     current: &SessionStatus,
     name: &HookEventName,

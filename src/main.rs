@@ -2,9 +2,11 @@ mod app;
 mod config;
 mod events;
 mod input;
+mod provider;
 mod session;
 mod tmux;
 mod tui;
+mod worktree;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,9 +18,13 @@ use crossterm::execute;
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
 
+use std::sync::Arc;
+
 use app::App;
 use events::hook_listener::HookListener;
 use events::types::HookEvent;
+use provider::claude_code::ClaudeCodeProvider;
+use provider::registry::ProviderRegistry;
 
 /// Events the main loop processes.
 enum AppEvent {
@@ -111,16 +117,8 @@ fn spawn_keyboard_reader(tx: mpsc::UnboundedSender<AppEvent>) {
             // Block on crossterm — this is intentional, it's on its own thread
             if event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
                 match event::read() {
-                    Ok(Event::Key(key)) => {
-                        if tx.send(AppEvent::Key(key)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(Event::Mouse(mouse)) => {
-                        if tx.send(AppEvent::Mouse(mouse)).is_err() {
-                            break;
-                        }
-                    }
+                    Ok(Event::Key(key)) if tx.send(AppEvent::Key(key)).is_err() => break,
+                    Ok(Event::Mouse(mouse)) if tx.send(AppEvent::Mouse(mouse)).is_err() => break,
                     _ => {}
                 }
             }
@@ -226,8 +224,18 @@ async fn main() -> Result<()> {
     let config_path = std::env::current_dir()
         .unwrap_or_default()
         .join("herald.toml");
-    let keybindings = config::load(&config_path);
-    let mut app = App::new(rt_dir.clone(), size.height, keybindings);
+    let (keybindings, providers_config) = config::load_config(&config_path);
+
+    let mut registry = ProviderRegistry::new();
+    registry.register(Box::new(ClaudeCodeProvider));
+    if let Some(default_id) = &providers_config.default {
+        if !registry.set_default(default_id) {
+            tracing::warn!("unknown default provider '{}', using first registered", default_id);
+        }
+    }
+    let registry = Arc::new(registry);
+
+    let mut app = App::new(rt_dir.clone(), size.height, keybindings, registry);
 
     // Try to discover existing sessions
     match app.session_manager.ensure_tmux_session().await {

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
@@ -12,6 +13,7 @@ use crate::events::queue::AttentionQueue;
 use crate::events::types::HookEvent;
 use crate::input::batcher::KeyBatcher;
 use crate::input::tmux_keys::{self, TmuxKey};
+use crate::provider::registry::ProviderRegistry;
 use crate::session::manager::SessionManager;
 use crate::session::model::SessionId;
 use crate::session::state_machine::{self, SessionEvent};
@@ -109,11 +111,12 @@ impl App {
         runtime_dir: PathBuf,
         terminal_rows: u16,
         keybindings: KeyBindings,
+        registry: Arc<ProviderRegistry>,
     ) -> Self {
         // Create a dummy channel — main() will replace event_tx
         let (_tx, rx) = mpsc::unbounded_channel();
         Self {
-            session_manager: SessionManager::new(runtime_dir.clone(), terminal_rows),
+            session_manager: SessionManager::new(runtime_dir.clone(), terminal_rows, registry),
             attention_queue: AttentionQueue::new(),
             active_session_id: None,
             focus: Focus::Sidebar,
@@ -133,7 +136,7 @@ impl App {
         }
     }
 
-    /// Process a hook event from a Claude Code session.
+    /// Process a hook event from a provider session.
     pub fn handle_hook_event(&mut self, event: HookEvent) {
         let session_id = event.session_id.clone();
 
@@ -201,6 +204,13 @@ impl App {
                         .map(|p| p.display().to_string())
                         .unwrap_or_default(),
                 );
+                // Populate provider list from registry
+                self.dialog.provider_names = self.session_manager.provider_names();
+                self.dialog.provider_index = self.session_manager.default_provider_index();
+                // Check if worktree creation is possible
+                let wd = PathBuf::from(&self.dialog.working_dir.text);
+                self.dialog.worktree_available =
+                    crate::worktree::WorktreeManager::can_create_worktree_sync(&wd);
                 self.dialog.key_labels = crate::tui::dialogs::DialogKeyLabels {
                     submit: config::format_key(&self.keybindings.dialog.submit[0]),
                     next_field: config::format_key(&self.keybindings.dialog.next_field[0]),
@@ -361,16 +371,22 @@ impl App {
                     let nickname = self.dialog.nickname.text.clone();
                     let prompt = self.dialog.prompt.text.clone();
                     let working_dir = PathBuf::from(&self.dialog.working_dir.text);
+                    let provider_id = self.session_manager
+                        .provider_id_at(self.dialog.provider_index)
+                        .unwrap_or_else(|| "claude-code".to_string());
+                    let use_worktree = self.dialog.use_worktree;
                     tracing::info!(
                         nickname = %nickname,
                         prompt = %prompt,
                         dir = %working_dir.display(),
+                        provider = %provider_id,
+                        worktree = use_worktree,
                         "launching new session"
                     );
                     self.dialog.reset();
                     self.focus = Focus::Sidebar;
 
-                    match self.session_manager.launch(&nickname, &prompt, &working_dir).await {
+                    match self.session_manager.launch(&nickname, &prompt, &working_dir, &provider_id, use_worktree).await {
                         Ok(id) => {
                             tracing::info!(session_id = %id, "session launched");
                             if let Some(ref tx) = self.event_tx {
@@ -392,16 +408,33 @@ impl App {
                 }
             }
             None => {
-                // Standard text editing keys (not configurable)
-                match key.code {
-                    KeyCode::Backspace => self.dialog.active_input().backspace(),
-                    KeyCode::Delete => self.dialog.active_input().delete(),
-                    KeyCode::Left => self.dialog.active_input().move_left(),
-                    KeyCode::Right => self.dialog.active_input().move_right(),
-                    KeyCode::Home => self.dialog.active_input().home(),
-                    KeyCode::End => self.dialog.active_input().end(),
-                    KeyCode::Char(c) => self.dialog.active_input().insert(c),
-                    _ => {}
+                // Handle field-specific keys first
+                match self.dialog.active_field {
+                    crate::tui::dialogs::DialogField::Provider => match key.code {
+                        KeyCode::Left => self.dialog.prev_provider(),
+                        KeyCode::Right => self.dialog.next_provider(),
+                        _ => {}
+                    },
+                    crate::tui::dialogs::DialogField::Worktree => {
+                        if let KeyCode::Char(' ') = key.code {
+                            self.dialog.toggle_worktree();
+                        }
+                    }
+                    _ => {
+                        // Standard text editing keys for text fields
+                        if let Some(input) = self.dialog.active_input() {
+                            match key.code {
+                                KeyCode::Backspace => input.backspace(),
+                                KeyCode::Delete => input.delete(),
+                                KeyCode::Left => input.move_left(),
+                                KeyCode::Right => input.move_right(),
+                                KeyCode::Home => input.home(),
+                                KeyCode::End => input.end(),
+                                KeyCode::Char(c) => input.insert(c),
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -644,11 +677,18 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use crate::events::types::{HookEvent, HookEventName};
 
+    fn test_registry() -> Arc<crate::provider::registry::ProviderRegistry> {
+        let mut registry = crate::provider::registry::ProviderRegistry::new();
+        registry.register(Box::new(crate::provider::claude_code::ClaudeCodeProvider));
+        Arc::new(registry)
+    }
+
     fn make_app() -> App {
         App::new(
             PathBuf::from("/tmp/herald-test"),
             24,
             crate::config::KeyBindings::default(),
+            test_registry(),
         )
     }
 
@@ -663,6 +703,7 @@ mod tests {
             "test".to_string(),
             "prompt".to_string(),
             PathBuf::from("/tmp"),
+            "claude-code".to_string(),
         );
         app.session_manager.insert_test_session(s);
     }
@@ -796,7 +837,7 @@ mod tests {
         kb.sidebar.quit = vec![KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE)];
         let mut app = App::new(
             PathBuf::from("/tmp/herald-test"),
-            24, kb,
+            24, kb, test_registry(),
         );
         // Default 'q' should no longer quit
         app.handle_key(KeyEvent::from(KeyCode::Char('q'))).await;
@@ -814,7 +855,7 @@ mod tests {
         ];
         let mut app = App::new(
             PathBuf::from("/tmp/herald-test"),
-            24, kb,
+            24, kb, test_registry(),
         );
         app.focus = Focus::MainArea;
         // Default Ctrl+G should NOT return to sidebar

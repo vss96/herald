@@ -6,21 +6,21 @@ expression: output
 │                                                      ││ ○ test [starting]    │
 │                                                      ││                      │
 │                                                      ││                      │
-│                                                      ││                      │
-│                                                      ││                      │
 │         ┌ New Session ─────────────────────────────────────────────┐         │
 │         │ Nickname:                                                │         │
 │         │  new-task                                                │         │
+│         │ Provider:                                                │         │
+│         │    (none)                                                │         │
 │         │ Directory:                                               │         │
 │         │                                                          │         │
+│         │ Worktree:                                                │         │
+│         │  [ ] isolate in git worktree                             │         │
 │         │ Prompt:                                                  │         │
 │         │                                                          │         │
 │         │                                                          │         │
 │         │                                                          │         │
 │         │ Enter:next  Tab:next field  Esc:cancel                   │         │
 │         └──────────────────────────────────────────────────────────┘         │
-│                                                      ││                      │
-│                                                      ││                      │
 │                                                      ││                      │
 │                                                      ││                      │
 │                                                      ││                      │

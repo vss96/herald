@@ -6,13 +6,15 @@ expression: output
 
 
 
-
-
           ┌ New Session ─────────────────────────────────────────────┐
           │ Nickname:                                                │
           │  my-session                                              │
+          │ Provider:                                                │
+          │    Claude Code                                           │
           │ Directory:                                               │
           │  /home/user/project                                      │
+          │ Worktree:                                                │
+          │  [ ] isolate in git worktree                             │
           │ Prompt:                                                  │
           │  fix the tests                                           │
           │                                                          │

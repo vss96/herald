@@ -9,6 +9,15 @@ use serde::Deserialize;
 pub struct ConfigFile {
     #[serde(default)]
     pub keys: KeysSection,
+    #[serde(default)]
+    pub providers: ProvidersConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ProvidersConfig {
+    /// Default provider ID (e.g., "claude-code"). Used as the initial
+    /// selection in the new session dialog.
+    pub default: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -275,25 +284,37 @@ fn resolve(field: Option<OneOrMany>, defaults: Vec<KeyEvent>) -> Vec<KeyEvent> {
     }
 }
 
-/// Load keybindings from a TOML file, falling back to defaults.
-pub fn load(path: &Path) -> KeyBindings {
+/// Load full configuration from a TOML file, falling back to defaults.
+pub fn load_config(path: &Path) -> (KeyBindings, ProvidersConfig) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return KeyBindings::default(),
+        Err(_) => return (KeyBindings::default(), ProvidersConfig::default()),
     };
 
     let config: ConfigFile = match toml::from_str(&content) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("failed to parse {}: {}", path.display(), e);
-            return KeyBindings::default();
+            return (KeyBindings::default(), ProvidersConfig::default());
         }
     };
 
+    let providers = config.providers;
+    let keybindings = resolve_keybindings(config.keys);
+    (keybindings, providers)
+}
+
+/// Load keybindings from a TOML file, falling back to defaults.
+#[cfg(test)]
+pub fn load(path: &Path) -> KeyBindings {
+    load_config(path).0
+}
+
+fn resolve_keybindings(keys: KeysSection) -> KeyBindings {
     let defaults = KeyBindings::default();
-    let sb = config.keys.sidebar;
-    let ma = config.keys.main_area;
-    let dl = config.keys.dialog;
+    let sb = keys.sidebar;
+    let ma = keys.main_area;
+    let dl = keys.dialog;
 
     KeyBindings {
         sidebar: SidebarKeys {

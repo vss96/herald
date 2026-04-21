@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 use crate::session::model::SessionId;
 
-/// A hook event received from Claude Code via Unix socket.
+/// A hook event received from a provider via Unix socket.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct HookEvent {
     pub session_id: SessionId,
@@ -60,32 +60,6 @@ impl HookEventName {
         self.priority() > Priority::Info
     }
 
-    /// Hook events that Herald subscribes to in Claude Code config.
-    pub const MANAGED: &[HookEventName] = &[
-        HookEventName::PermissionRequest,
-        HookEventName::PostToolUse,
-        HookEventName::PostToolUseFailure,
-        HookEventName::Stop,
-        HookEventName::Notification,
-        HookEventName::UserPromptSubmit,
-        HookEventName::SubagentStart,
-    ];
-
-    /// Serde variant name for use in JSON hook configuration.
-    pub fn as_config_str(&self) -> &'static str {
-        match self {
-            Self::PermissionRequest => "PermissionRequest",
-            Self::PreToolUse => "PreToolUse",
-            Self::PostToolUse => "PostToolUse",
-            Self::PostToolUseFailure => "PostToolUseFailure",
-            Self::Stop => "Stop",
-            Self::Notification => "Notification",
-            Self::SessionStart => "SessionStart",
-            Self::SessionEnd => "SessionEnd",
-            Self::UserPromptSubmit => "UserPromptSubmit",
-            Self::SubagentStart => "SubagentStart",
-        }
-    }
 }
 
 #[cfg(test)]
