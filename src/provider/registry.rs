@@ -34,12 +34,6 @@ impl ProviderRegistry {
         self.providers.iter().find(|p| p.id() == id).map(|p| &**p)
     }
 
-    /// The default provider.
-    #[allow(dead_code)]
-    pub fn default_provider(&self) -> Option<&dyn Provider> {
-        self.providers.get(self.default_index).map(|p| &**p)
-    }
-
     /// Default provider index (for dialog pre-selection).
     pub fn default_index(&self) -> usize {
         self.default_index
@@ -54,17 +48,6 @@ impl ProviderRegistry {
     pub fn provider_ids(&self) -> Vec<&str> {
         self.providers.iter().map(|p| p.id()).collect()
     }
-
-    /// Number of registered providers.
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.providers.len()
-    }
-
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.providers.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -77,8 +60,6 @@ mod tests {
         let mut registry = ProviderRegistry::new();
         registry.register(Box::new(ClaudeCodeProvider));
 
-        assert_eq!(registry.len(), 1);
-        assert!(!registry.is_empty());
         assert_eq!(registry.provider_names(), vec!["Claude Code"]);
         assert_eq!(registry.provider_ids(), vec!["claude-code"]);
 
@@ -91,8 +72,6 @@ mod tests {
         let mut registry = ProviderRegistry::new();
         registry.register(Box::new(ClaudeCodeProvider));
 
-        let default = registry.default_provider().unwrap();
-        assert_eq!(default.id(), "claude-code");
         assert_eq!(registry.default_index(), 0);
     }
 
@@ -108,8 +87,6 @@ mod tests {
     #[test]
     fn empty_registry() {
         let registry = ProviderRegistry::new();
-        assert!(registry.is_empty());
-        assert!(registry.default_provider().is_none());
         assert!(registry.get_by_id("claude-code").is_none());
     }
 }

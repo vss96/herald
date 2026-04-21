@@ -305,7 +305,7 @@ pub fn load_config(path: &Path) -> (KeyBindings, ProvidersConfig) {
 }
 
 /// Load keybindings from a TOML file, falling back to defaults.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn load(path: &Path) -> KeyBindings {
     load_config(path).0
 }

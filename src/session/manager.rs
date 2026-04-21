@@ -87,7 +87,6 @@ impl SessionManager {
                 .expect("provider disappeared from registry");
             let ctx = HookSetupContext {
                 session_id: &sid_clone,
-                runtime_dir: &rt_dir,
                 working_dir: &wd,
                 socket_path: rt_dir.join(format!("{}.sock", sid_clone)),
                 hook_script_path: rt_dir.join("herald-hook.py"),
@@ -102,24 +101,18 @@ impl SessionManager {
         commands::send_keys(pane_id.as_str(), "Enter").await?;
 
         // Handle prompt delivery based on provider's preference
-        match launch_cmd.prompt_delivery {
-            PromptDelivery::TypeAfterDelay { delay_secs } => {
-                // Write prompt to a temp file to avoid shell injection.
-                let prompt_file = self.runtime_dir.join(format!("{}.prompt", session_id));
-                tokio::fs::write(&prompt_file, prompt)
-                    .await
-                    .context("writing prompt file")?;
+        let PromptDelivery::TypeAfterDelay { delay_secs } = launch_cmd.prompt_delivery;
+        // Write prompt to a temp file to avoid shell injection.
+        let prompt_file = self.runtime_dir.join(format!("{}.prompt", session_id));
+        tokio::fs::write(&prompt_file, prompt)
+            .await
+            .context("writing prompt file")?;
 
-                tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-                commands::send_keys_literal(pane_id.as_str(), prompt).await?;
-                commands::send_special_key(pane_id.as_str(), "Enter").await?;
+        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        commands::send_keys_literal(pane_id.as_str(), prompt).await?;
+        commands::send_special_key(pane_id.as_str(), "Enter").await?;
 
-                let _ = tokio::fs::remove_file(&prompt_file).await;
-            }
-            PromptDelivery::InCommand => {
-                // Prompt was already part of the launch command — nothing to do.
-            }
-        }
+        let _ = tokio::fs::remove_file(&prompt_file).await;
 
         let mut session = Session::new(
             session_id.clone(),
@@ -148,7 +141,6 @@ impl SessionManager {
                 if let Some(provider) = registry.get_by_id(&provider_id) {
                     let ctx = HookSetupContext {
                         session_id: &sid,
-                        runtime_dir: &rt_dir,
                         working_dir: &wd,
                         socket_path: rt_dir.join(format!("{}.sock", sid)),
                         hook_script_path: rt_dir.join("herald-hook.py"),

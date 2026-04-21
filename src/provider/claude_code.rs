@@ -43,10 +43,6 @@ impl Provider for ClaudeCodeProvider {
     fn cleanup_hooks(&self, ctx: &HookSetupContext) -> Result<()> {
         remove_hook_config(ctx.working_dir)
     }
-
-    fn managed_hook_events(&self) -> Vec<String> {
-        MANAGED_EVENTS.iter().map(|s| (*s).to_string()).collect()
-    }
 }
 
 /// Escape a string for safe use in shell single quotes.
@@ -169,7 +165,6 @@ mod tests {
     ) -> HookSetupContext<'a> {
         HookSetupContext {
             session_id,
-            runtime_dir,
             working_dir,
             socket_path: runtime_dir.join(format!("{}.sock", session_id)),
             hook_script_path: runtime_dir.join("herald-hook.py"),
@@ -410,7 +405,5 @@ mod tests {
         let provider = ClaudeCodeProvider;
         assert_eq!(provider.name(), "Claude Code");
         assert_eq!(provider.id(), "claude-code");
-        assert!(provider.managed_hook_events().contains(&"PermissionRequest".to_string()));
-        assert!(provider.managed_hook_events().contains(&"Stop".to_string()));
     }
 }
