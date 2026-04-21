@@ -117,16 +117,8 @@ fn spawn_keyboard_reader(tx: mpsc::UnboundedSender<AppEvent>) {
             // Block on crossterm — this is intentional, it's on its own thread
             if event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
                 match event::read() {
-                    Ok(Event::Key(key)) => {
-                        if tx.send(AppEvent::Key(key)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(Event::Mouse(mouse)) => {
-                        if tx.send(AppEvent::Mouse(mouse)).is_err() {
-                            break;
-                        }
-                    }
+                    Ok(Event::Key(key)) if tx.send(AppEvent::Key(key)).is_err() => break,
+                    Ok(Event::Mouse(mouse)) if tx.send(AppEvent::Mouse(mouse)).is_err() => break,
                     _ => {}
                 }
             }
