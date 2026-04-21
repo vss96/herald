@@ -92,6 +92,7 @@ impl WorktreeManager {
     }
 
     /// Check if a directory is inside a git repo with at least one commit (async).
+    #[allow(dead_code)]
     pub async fn can_create_worktree(dir: &Path) -> bool {
         if dir.as_os_str().is_empty() {
             return false;
@@ -119,6 +120,7 @@ impl WorktreeManager {
     }
 
     /// Clean up orphaned Herald worktrees not matching any active session.
+    #[allow(dead_code)]
     pub async fn cleanup_orphaned(
         repo_dir: &Path,
         active_ids: &[SessionId],
