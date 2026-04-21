@@ -60,9 +60,9 @@ fn write_hook_config(ctx: &HookSetupContext) -> Result<()> {
 
     let herald_cmd = format!(
         "CLAUDE_SESSION_ID={} HERALD_SOCKET={} python3 {}",
-        ctx.session_id,
-        ctx.socket_path.display(),
-        ctx.hook_script_path.display()
+        shell_escape(ctx.session_id.to_string()),
+        shell_escape(ctx.socket_path.display().to_string()),
+        shell_escape(ctx.hook_script_path.display().to_string())
     );
 
     let herald_hook_entry = serde_json::json!({
@@ -82,7 +82,7 @@ fn write_hook_config(ctx: &HookSetupContext) -> Result<()> {
         serde_json::json!({})
     };
 
-    if config.get("hooks").is_none() {
+    if !config.get("hooks").is_some_and(|h| h.is_object()) {
         config["hooks"] = serde_json::json!({});
     }
 
@@ -197,6 +197,55 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(perm_cmd.contains("test-session-123"));
+    }
+
+    #[test]
+    fn hook_command_shell_escapes_interpolated_values() {
+        // Regression: before shell_escape was applied to the hook command args,
+        // a path or session id containing shell metacharacters could break the
+        // quoting or enable command injection.
+        let dir = tempfile::tempdir().unwrap();
+        let working_dir = tempfile::tempdir().unwrap();
+        let session_id = SessionId("weird id; rm -rf /".into());
+        let ctx = test_context(dir.path(), working_dir.path(), &session_id);
+
+        write_hook_config(&ctx).unwrap();
+
+        let content = std::fs::read_to_string(
+            working_dir.path().join(".claude/settings.local.json"),
+        )
+        .unwrap();
+
+        assert!(content.contains(r"CLAUDE_SESSION_ID='weird id; rm -rf /'"));
+        assert!(!content.contains("CLAUDE_SESSION_ID=weird id;"));
+    }
+
+    #[test]
+    fn hook_config_normalizes_non_object_hooks() {
+        // Regression: if settings.local.json has "hooks" as a non-object
+        // (e.g. array), indexing it by event name used to panic. We now
+        // overwrite malformed hooks with an empty object.
+        let dir = tempfile::tempdir().unwrap();
+        let working_dir = tempfile::tempdir().unwrap();
+        let claude_dir = working_dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            serde_json::to_string_pretty(&serde_json::json!({ "hooks": [] })).unwrap(),
+        )
+        .unwrap();
+
+        let session_id = SessionId("test-session".into());
+        let ctx = test_context(dir.path(), working_dir.path(), &session_id);
+        write_hook_config(&ctx).unwrap();
+
+        let content =
+            std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert!(parsed["hooks"].is_object());
+        assert!(parsed["hooks"]["PermissionRequest"].is_array());
     }
 
     #[test]
