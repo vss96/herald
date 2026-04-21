@@ -10,6 +10,7 @@ use crate::session::model::SessionId;
 /// Context passed to a provider for hook setup/teardown.
 pub struct HookSetupContext<'a> {
     pub session_id: &'a SessionId,
+    #[allow(dead_code)]
     pub runtime_dir: &'a Path,
     pub working_dir: &'a Path,
     pub socket_path: PathBuf,
@@ -25,6 +26,7 @@ pub struct LaunchCommand {
 }
 
 /// How the initial prompt is delivered to the provider after launch.
+#[allow(dead_code)]
 pub enum PromptDelivery {
     /// Type the prompt as keystrokes after a delay (Claude Code model).
     TypeAfterDelay { delay_secs: u64 },
@@ -54,5 +56,6 @@ pub trait Provider: Send + Sync {
     fn cleanup_hooks(&self, ctx: &HookSetupContext) -> Result<()>;
 
     /// Hook event names this provider subscribes to (written into config).
+    #[allow(dead_code)]
     fn managed_hook_events(&self) -> Vec<String>;
 }

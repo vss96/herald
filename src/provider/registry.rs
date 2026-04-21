@@ -35,6 +35,7 @@ impl ProviderRegistry {
     }
 
     /// The default provider.
+    #[allow(dead_code)]
     pub fn default_provider(&self) -> Option<&dyn Provider> {
         self.providers.get(self.default_index).map(|p| &**p)
     }
@@ -55,10 +56,12 @@ impl ProviderRegistry {
     }
 
     /// Number of registered providers.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.providers.len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
     }
